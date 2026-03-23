@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, Notification } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import { AuthService } from './services/auth.service';
 import { SocketService } from './services/socket.service';
@@ -95,7 +96,7 @@ function createTray(): void {
     { type: 'separator' },
     {
       label: 'Dashboard Hou.la',
-      click: () => shell.openExternal(`${store.getAppUrl()}/manager/print`),
+      click: () => shell.openExternal(`${store.getAppUrl()}/manager/shop/settings`),
     },
     { type: 'separator' },
     {
@@ -279,6 +280,13 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   registerIpcHandlers();
+
+  // Initialize auto updater
+  try {
+    autoUpdater.checkForUpdatesAndNotify();
+  } catch (err) {
+    console.error('Failed to check for updates', err);
+  }
 
   // Auto-detect printers
   await printer.detectPrinters();

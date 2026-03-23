@@ -45,6 +45,19 @@ npm install
 npm run dev
 ```
 
+The app auto-detects the environment at startup:
+
+1. `--dev` CLI flag → `development`
+2. `NODE_ENV=development` → `development`
+3. `app.isPackaged === false` (running via `electron .`) → `development`
+4. Otherwise → `production`
+
+In **development** mode:
+- API points to `http://localhost:53001`
+- OAuth redirects to `https://localhost:59223`
+- A yellow **DEV** badge is displayed in the titlebar
+- Settings panel shows current env and API URL
+
 ### Build
 
 ```bash
