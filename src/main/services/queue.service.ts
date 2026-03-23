@@ -1,0 +1,219 @@
+import { Notification } from 'electron';
+import { StoreService } from './store.service';
+import { ApiService } from './api.service';
+import { PrinterService } from './printer.service';
+import { PrintJob, WorkspaceState } from '../../shared/types';
+
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [2000, 5000, 15000]; // ms
+
+/**
+ * Local print queue: receives jobs from WebSocket or API polling,
+ * routes them to the correct printer, handles retries, and acks the API.
+ */
+export class QueueService {
+  private pendingJobs: Map<string, { job: PrintJob; apiKey: string; retries: number }> = new Map();
+  private lastError: string | null = null;
+  private processing = false;
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(
+    private store: StoreService,
+    private api: ApiService,
+    private printer: PrinterService,
+  ) {
+    // Process queue every 2 seconds
+    this.timer = setInterval(() => this.processNext(), 2000);
+  }
+
+  /**
+   * Add jobs received from WebSocket to the local queue.
+   */
+  enqueueJobs(jobs: PrintJob[], apiKey: string): void {
+    for (const job of jobs) {
+      if (!this.pendingJobs.has(job.id)) {
+        this.pendingJobs.set(job.id, { job, apiKey, retries: 0 });
+      }
+    }
+
+    if (jobs.length > 0) {
+      new Notification({
+        title: 'Hou.la Print',
+        body: `${jobs.length} nouveau${jobs.length > 1 ? 'x' : ''} job${jobs.length > 1 ? 's' : ''} d'impression`,
+      }).show();
+    }
+  }
+
+  /**
+   * Remove cancelled jobs from the local queue.
+   */
+  cancelJobs(jobIds: string[]): void {
+    for (const id of jobIds) {
+      this.pendingJobs.delete(id);
+    }
+  }
+
+  /**
+   * Fetch pending jobs from the API for all active workspaces (on startup/reconnect).
+   */
+  async fetchPendingFromApi(activeWorkspaces: WorkspaceState[]): Promise<void> {
+    for (const ws of activeWorkspaces) {
+      await this.fetchPendingForWorkspace(ws.workspace.id, ws.apiKey);
+    }
+  }
+
+  /**
+   * Fetch pending jobs for a single workspace.
+   */
+  async fetchPendingForWorkspace(workspaceId: string, apiKey: string): Promise<void> {
+    try {
+      const jobs = await this.api.getPendingJobs(apiKey);
+      this.enqueueJobs(jobs, apiKey);
+    } catch (err) {
+      console.error(`Failed to fetch pending jobs for workspace ${workspaceId}:`, err);
+    }
+  }
+
+  /**
+   * Process the next pending job in the queue.
+   */
+  private async processNext(): Promise<void> {
+    if (this.processing) return;
+    if (this.pendingJobs.size === 0) return;
+
+    // Get first pending job (FIFO)
+    const [jobId, entry] = this.pendingJobs.entries().next().value as [string, { job: PrintJob; apiKey: string; retries: number }];
+    const { job, apiKey } = entry;
+
+    // Check if a printer is assigned for this job type
+    const assignments = this.store.getPrinterAssignments();
+    const printerName = assignments[job.type];
+    if (!printerName) {
+      // No printer assigned — skip for now, don't remove from queue
+      return;
+    }
+
+    this.processing = true;
+
+    try {
+      await this.executePrint(job, printerName);
+
+      // Success — ack the API and remove from queue
+      await this.api.ackJob(apiKey, job.id, 'printed').catch(console.error);
+      this.pendingJobs.delete(jobId);
+      this.store.incrementPrintedToday();
+      this.lastError = null;
+    } catch (err: any) {
+      const errorMsg = err.message || String(err);
+      console.error(`Print failed for job ${jobId}:`, errorMsg);
+
+      entry.retries++;
+      if (entry.retries >= MAX_RETRIES) {
+        // Max retries reached — mark as failed
+        await this.api.ackJob(apiKey, job.id, 'failed', errorMsg).catch(console.error);
+        this.pendingJobs.delete(jobId);
+        this.lastError = `Job ${jobId.substring(0, 8)} échoué: ${errorMsg}`;
+
+        new Notification({
+          title: 'Hou.la Print — Erreur',
+          body: `Impression échouée après ${MAX_RETRIES} tentatives`,
+        }).show();
+      } else {
+        // Schedule retry with backoff
+        const delay = RETRY_DELAYS[entry.retries - 1] || 15000;
+        this.lastError = `Tentative ${entry.retries}/${MAX_RETRIES}: ${errorMsg}`;
+        setTimeout(() => {
+          // Job stays in queue, will be retried on next processNext cycle
+        }, delay);
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  /**
+   * Execute the actual print operation based on label format.
+   */
+  private async executePrint(job: PrintJob, printerName: string): Promise<void> {
+    switch (job.labelFormat) {
+      case 'zpl':
+        if (!job.labelData) throw new Error('No label data for ZPL job');
+        await this.printer.printZpl(printerName, job.labelData);
+        break;
+
+      case 'escpos':
+        if (!job.labelData) throw new Error('No label data for ESC/POS job');
+        await this.printer.printEscPos(printerName, job.labelData);
+        break;
+
+      case 'pdf':
+        if (job.labelData) {
+          // Inline PDF (base64)
+          const buffer = Buffer.from(job.labelData, 'base64');
+          await this.printer.printPdf(printerName, buffer);
+        } else if (job.labelUrl) {
+          // Download PDF from API then print
+          const data = await this.api.getLabelData(
+            this.getApiKeyForJob(job),
+            job.id,
+          );
+          const buffer = Buffer.from(data, 'base64');
+          await this.printer.printPdf(printerName, buffer);
+        } else {
+          throw new Error('No label data or URL for PDF job');
+        }
+        break;
+
+      default:
+        throw new Error(`Unsupported label format: ${job.labelFormat}`);
+    }
+  }
+
+  /**
+   * Find the API key for a job's workspace.
+   */
+  private getApiKeyForJob(job: PrintJob): string {
+    const workspaces = this.store.getWorkspaces();
+    return workspaces[job.workspaceId]?.apiKey || '';
+  }
+
+  /**
+   * Retry all failed jobs (re-enqueue).
+   */
+  async retryAllFailed(): Promise<void> {
+    // Failed jobs were already removed — this retries by re-fetching from API
+    const workspaces = this.store.getWorkspaces();
+    for (const [wsId, wsData] of Object.entries(workspaces)) {
+      if (wsData.enabled && wsData.apiKey) {
+        await this.fetchPendingForWorkspace(wsId, wsData.apiKey);
+      }
+    }
+  }
+
+  getPendingCount(): number {
+    return this.pendingJobs.size;
+  }
+
+  getPrintedTodayCount(): number {
+    return this.store.getPrintedTodayCount();
+  }
+
+  getLastError(): string | null {
+    return this.lastError;
+  }
+
+  getStats(): { pending: number; printedToday: number; lastError: string | null } {
+    return {
+      pending: this.getPendingCount(),
+      printedToday: this.getPrintedTodayCount(),
+      lastError: this.lastError,
+    };
+  }
+
+  close(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+}

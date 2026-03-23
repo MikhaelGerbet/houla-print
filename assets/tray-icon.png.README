@@ -1,0 +1,2 @@
+Placeholder — replace with a real 16x16 PNG tray icon.
+Generate from the SVG logo: `npx sharp-cli -i assets/logo.svg -o assets/tray-icon.png resize 16 16`

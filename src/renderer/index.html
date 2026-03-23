@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; script-src 'self'">
+  <title>Hou.la Print</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Title bar (frameless window) -->
+  <header class="titlebar" id="titlebar">
+    <div class="titlebar-title">
+      <img src="../assets/logo.svg" alt="" class="titlebar-logo" onerror="this.style.display='none'">
+      <span>Hou.la Print</span>
+    </div>
+    <div class="titlebar-actions">
+      <button class="titlebar-btn" id="btn-minimize" title="Réduire">─</button>
+      <button class="titlebar-btn titlebar-close" id="btn-close" title="Fermer">✕</button>
+    </div>
+  </header>
+
+  <!-- Main content area -->
+  <main class="app" id="app">
+
+    <!-- === LOGIN VIEW === -->
+    <section class="view" id="view-login">
+      <div class="login-hero">
+        <div class="login-icon">🖨️</div>
+        <h1>Hou.la Print</h1>
+        <p>Impression automatique de vos étiquettes produits, factures et bordereaux dès qu'une commande est payée.</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="btn-login">
+        Se connecter avec Hou.la
+      </button>
+      <p class="login-hint">Connectez-vous pour lier vos boutiques</p>
+    </section>
+
+    <!-- === DASHBOARD VIEW === -->
+    <section class="view hidden" id="view-dashboard">
+
+      <!-- Status bar -->
+      <div class="status-bar" id="status-bar">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Déconnecté</span>
+        <span class="status-spacer"></span>
+        <span class="status-stat" id="stat-pending">0 en attente</span>
+        <span class="status-sep">•</span>
+        <span class="status-stat" id="stat-today">0 imprimé(s)</span>
+      </div>
+
+      <!-- Tabs -->
+      <nav class="tabs">
+        <button class="tab active" data-tab="workspaces">Boutiques</button>
+        <button class="tab" data-tab="printers">Imprimantes</button>
+        <button class="tab" data-tab="settings">Paramètres</button>
+      </nav>
+
+      <!-- Tab: Workspaces -->
+      <div class="tab-panel active" id="panel-workspaces">
+        <div class="panel-header">
+          <h2>Vos boutiques</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-refresh-workspaces">↻ Rafraîchir</button>
+        </div>
+        <div class="workspace-list" id="workspace-list">
+          <div class="empty-state">Aucune boutique trouvée</div>
+        </div>
+      </div>
+
+      <!-- Tab: Printers -->
+      <div class="tab-panel hidden" id="panel-printers">
+        <div class="panel-header">
+          <h2>Imprimantes</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-refresh-printers">↻ Détecter</button>
+        </div>
+
+        <!-- Detected printers -->
+        <div class="section">
+          <h3>Imprimantes détectées</h3>
+          <div class="printer-list" id="printer-list">
+            <div class="empty-state">Aucune imprimante détectée</div>
+          </div>
+        </div>
+
+        <!-- Printer assignments -->
+        <div class="section">
+          <h3>Attribution des tâches</h3>
+          <div class="assignment-list" id="assignment-list"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Settings -->
+      <div class="tab-panel hidden" id="panel-settings">
+        <div class="panel-header">
+          <h2>Paramètres</h2>
+        </div>
+
+        <div class="settings-list">
+          <div class="setting-item">
+            <span>Version</span>
+            <span class="setting-value">1.0.0</span>
+          </div>
+          <div class="setting-item">
+            <span>Dashboard Hou.la</span>
+            <button class="btn btn-sm btn-ghost" id="btn-open-dashboard">Ouvrir ↗</button>
+          </div>
+          <div class="setting-item setting-danger">
+            <span>Déconnexion</span>
+            <button class="btn btn-sm btn-danger" id="btn-logout">Se déconnecter</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error banner -->
+      <div class="error-banner hidden" id="error-banner">
+        <span id="error-text"></span>
+        <button class="btn btn-sm btn-ghost" id="btn-retry-all">Réessayer tout</button>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

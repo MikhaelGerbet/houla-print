@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+*.env
+.env.*
+
+# Compiled JS from TS in src/
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map
+!src/renderer/*.js
