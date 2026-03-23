@@ -39,4 +39,5 @@ contextBridge.exposeInMainWorld('houlaPrint', {
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   minimize: () => ipcRenderer.send(IPC.APP_MINIMIZE),
   openExternal: (url: string) => ipcRenderer.send(IPC.OPEN_EXTERNAL, url),
+  setEnv: (env: 'production' | 'development') => ipcRenderer.invoke(IPC.SET_ENV, env),
 });

@@ -16,6 +16,7 @@
     <div class="titlebar-title">
       <img src="../assets/logo.svg" alt="" class="titlebar-logo" onerror="this.style.display='none'">
       <span>Hou.la Print</span>
+      <span class="env-badge hidden" id="env-badge">DEV</span>
     </div>
     <div class="titlebar-actions">
       <button class="titlebar-btn" id="btn-minimize" title="Réduire">─</button>
@@ -99,6 +100,14 @@
         </div>
 
         <div class="settings-list">
+          <div class="setting-item">
+            <span>Environnement</span>
+            <span class="setting-value" id="setting-env">production</span>
+          </div>
+          <div class="setting-item">
+            <span>API</span>
+            <span class="setting-value" id="setting-api-url">—</span>
+          </div>
           <div class="setting-item">
             <span>Version</span>
             <span class="setting-value">1.0.0</span>

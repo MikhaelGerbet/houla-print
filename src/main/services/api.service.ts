@@ -1,5 +1,6 @@
 import { StoreService } from './store.service';
 import { PrintJob, PrintConfig, Workspace } from '../../shared/types';
+import { OAUTH_CLIENT_ID, APP_PROTOCOL } from '../../shared/config';
 
 /**
  * HTTP client for the Hou.la API.
@@ -62,8 +63,8 @@ export class ApiService {
         grant_type: 'authorization_code',
         code,
         code_verifier: codeVerifier,
-        client_id: 'houla-print-desktop',
-        redirect_uri: 'houla-print://callback',
+        client_id: OAUTH_CLIENT_ID,
+        redirect_uri: `${APP_PROTOCOL}://callback`,
       }),
     });
     if (!res.ok) {
@@ -83,7 +84,7 @@ export class ApiService {
       body: JSON.stringify({
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
-        client_id: 'houla-print-desktop',
+        client_id: OAUTH_CLIENT_ID,
       }),
     });
     if (!res.ok) {

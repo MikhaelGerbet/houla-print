@@ -1,5 +1,6 @@
 import Store from 'electron-store';
 import { PrinterAssignments, WorkspaceState } from '../../shared/types';
+import { API_URLS, APP_URLS } from '../../shared/config';
 
 interface StoreSchema {
   // Auth
@@ -48,8 +49,8 @@ export class StoreService {
         printerAssignments: DEFAULT_PRINTER_ASSIGNMENTS,
         printedTodayCount: 0,
         printedTodayDate: new Date().toISOString().split('T')[0],
-        apiUrl: 'https://hou.la',
-        appUrl: 'https://app.hou.la',
+        apiUrl: API_URLS.production,
+        appUrl: APP_URLS.production,
         env: 'production',
       },
     });
@@ -167,12 +168,7 @@ export class StoreService {
 
   setEnv(env: 'production' | 'development'): void {
     this.store.set('env', env);
-    if (env === 'development') {
-      this.store.set('apiUrl', 'http://localhost:53001');
-      this.store.set('appUrl', 'https://localhost:59223');
-    } else {
-      this.store.set('apiUrl', 'https://hou.la');
-      this.store.set('appUrl', 'https://app.hou.la');
-    }
+    this.store.set('apiUrl', API_URLS[env]);
+    this.store.set('appUrl', APP_URLS[env]);
   }
 }

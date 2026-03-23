@@ -24,6 +24,9 @@ const $printerList = document.getElementById('printer-list');
 const $assignmentList = document.getElementById('assignment-list');
 const $errorBanner = document.getElementById('error-banner');
 const $errorText = document.getElementById('error-text');
+const $envBadge = document.getElementById('env-badge');
+const $settingEnv = document.getElementById('setting-env');
+const $settingApiUrl = document.getElementById('setting-api-url');
 
 const JOB_TYPE_LABELS = {
   product_label: 'Étiquettes produits',
@@ -70,6 +73,15 @@ function updateUI(state) {
 
   $statPending.textContent = `${state.pendingJobsCount} en attente`;
   $statToday.textContent = `${state.printedTodayCount} imprimé(s)`;
+
+  // Environment badge
+  if (state.env === 'development') {
+    $envBadge.classList.remove('hidden');
+  } else {
+    $envBadge.classList.add('hidden');
+  }
+  $settingEnv.textContent = state.env || 'production';
+  $settingApiUrl.textContent = state.apiUrl || '—';
 
   // Error banner
   if (state.lastError) {

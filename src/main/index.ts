@@ -95,7 +95,7 @@ function createTray(): void {
     { type: 'separator' },
     {
       label: 'Dashboard Hou.la',
-      click: () => shell.openExternal('https://app.hou.la/manager'),
+      click: () => shell.openExternal(`${store.getAppUrl()}/manager/print`),
     },
     { type: 'separator' },
     {
@@ -118,8 +118,19 @@ function createTray(): void {
   });
 }
 
+function detectEnv(): 'production' | 'development' {
+  // CLI flag takes precedence
+  if (process.argv.includes('--dev')) return 'development';
+  // NODE_ENV from environment
+  if (process.env.NODE_ENV === 'development') return 'development';
+  // Electron: app.isPackaged is false when running via `electron .`
+  if (!app.isPackaged) return 'development';
+  return 'production';
+}
+
 function initServices(): void {
   store = new StoreService();
+  store.setEnv(detectEnv());
   api = new ApiService(store);
   auth = new AuthService(store, api);
   printer = new PrinterService();
@@ -181,6 +192,14 @@ function registerIpcHandlers(): void {
     broadcastState();
   });
 
+  // Environment
+  ipcMain.handle(IPC.SET_ENV, (_e, env: 'production' | 'development') => {
+    store.setEnv(env);
+    // Rebuild tray to reflect the new dashboard URL
+    createTray();
+    broadcastState();
+  });
+
   // App
   ipcMain.on(IPC.APP_QUIT, () => app.exit(0));
   ipcMain.on(IPC.APP_MINIMIZE, () => mainWindow?.hide());
@@ -202,6 +221,9 @@ function getAppState(): AppState {
     pendingJobsCount: queue.getPendingCount(),
     printedTodayCount: queue.getPrintedTodayCount(),
     lastError: queue.getLastError(),
+    env: store.getEnv(),
+    apiUrl: store.getApiUrl(),
+    appUrl: store.getAppUrl(),
   };
 }
 

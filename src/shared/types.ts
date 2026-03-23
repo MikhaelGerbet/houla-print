@@ -78,6 +78,9 @@ export interface AppState {
   pendingJobsCount: number;
   printedTodayCount: number;
   lastError: string | null;
+  env: 'production' | 'development';
+  apiUrl: string;
+  appUrl: string;
 }
 
 /** IPC channel names for main ↔ renderer communication */
@@ -108,5 +111,6 @@ export const IPC = {
   APP_QUIT: 'app:quit',
   APP_MINIMIZE: 'app:minimize',
   OPEN_EXTERNAL: 'app:open-external',
+  SET_ENV: 'app:set-env',
   NOTIFICATION: 'app:notification',
 } as const;

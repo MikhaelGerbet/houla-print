@@ -97,6 +97,21 @@ body {
   color: #fff;
 }
 
+.env-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--warning);
+  color: #000;
+}
+
+.env-badge.hidden {
+  display: none;
+}
+
 /* ═══════════════════════════════════════════════════════
    Main App Area
    ═══════════════════════════════════════════════════════ */
