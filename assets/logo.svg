@@ -4,7 +4,25 @@
       <stop offset="0%" stop-color="#667eea"/>
       <stop offset="100%" stop-color="#764ba2"/>
     </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0bbafb"/>
+      <stop offset="100%" stop-color="#2f8eef"/>
+    </linearGradient>
   </defs>
+  <!-- Background -->
   <rect width="64" height="64" rx="14" fill="url(#g)"/>
-  <text x="32" y="44" text-anchor="middle" font-family="Arial,sans-serif" font-size="30" font-weight="bold" fill="#fff">H</text>
+  <!-- H letter -->
+  <text x="32" y="40" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="28" font-weight="700" fill="#fff">H</text>
+  <!-- Printer badge (bottom-right) -->
+  <g transform="translate(40, 40)">
+    <circle cx="10" cy="10" r="12" fill="url(#g2)" stroke="#0f0f14" stroke-width="2"/>
+    <!-- Printer body -->
+    <rect x="4" y="7" width="12" height="7" rx="1.5" fill="#fff"/>
+    <!-- Paper top -->
+    <rect x="6" y="3" width="8" height="5" rx="0.5" fill="#fff" opacity="0.85"/>
+    <!-- Paper output -->
+    <rect x="6" y="13" width="8" height="3" rx="0.5" fill="#fff" opacity="0.85"/>
+    <!-- Printer dot -->
+    <circle cx="14" cy="10" r="1" fill="#667eea"/>
+  </g>
 </svg>

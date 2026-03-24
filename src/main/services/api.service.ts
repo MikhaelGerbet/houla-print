@@ -56,7 +56,7 @@ export class ApiService {
 
   async exchangeOAuthCode(code: string, codeVerifier: string): Promise<{ accessToken: string; refreshToken: string }> {
     const baseUrl = this.store.getApiUrl();
-    const res = await fetch(`${baseUrl}/auth/oauth/token`, {
+    const res = await fetch(`${baseUrl}/api/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -68,9 +68,11 @@ export class ApiService {
       }),
     });
     if (!res.ok) {
-      throw new Error(`OAuth token exchange failed: ${res.status}`);
+      const errBody = await res.text();
+      throw new Error(`OAuth token exchange failed: ${res.status} ${errBody}`);
     }
-    return res.json() as Promise<{ accessToken: string; refreshToken: string }>;
+    const data = await res.json() as { access_token: string; refresh_token: string };
+    return { accessToken: data.access_token, refreshToken: data.refresh_token };
   }
 
   async refreshAccessToken(): Promise<string> {
@@ -78,7 +80,7 @@ export class ApiService {
     if (!refreshToken) throw new Error('No refresh token');
 
     const baseUrl = this.store.getApiUrl();
-    const res = await fetch(`${baseUrl}/auth/oauth/token`, {
+    const res = await fetch(`${baseUrl}/api/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -91,12 +93,12 @@ export class ApiService {
       this.store.clearAuth();
       throw new Error('Refresh token expired');
     }
-    const data = await res.json() as { accessToken: string; refreshToken?: string };
-    this.store.setAccessToken(data.accessToken);
-    if (data.refreshToken) {
-      this.store.setRefreshToken(data.refreshToken);
+    const data = await res.json() as { access_token: string; refresh_token?: string };
+    this.store.setAccessToken(data.access_token);
+    if (data.refresh_token) {
+      this.store.setRefreshToken(data.refresh_token);
     }
-    return data.accessToken;
+    return data.access_token;
   }
 
   // ═══════════════════════════════════════════════════════

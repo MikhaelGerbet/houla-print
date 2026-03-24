@@ -37,7 +37,7 @@ export class AuthService {
       scope: 'workspaces print api-keys',
     });
 
-    const authUrl = `${this.store.getAppUrl()}/auth/authorize?${params.toString()}`;
+    const authUrl = `${this.store.getAppUrl()}/oauth/authorize?${params.toString()}`;
     await shell.openExternal(authUrl);
   }
 

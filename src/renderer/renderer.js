@@ -9,6 +9,11 @@
 const win = /** @type {any} */ (window);
 const api = win.houlaPrint;
 
+console.log('[Renderer] houlaPrint bridge available:', !!api);
+if (!api) {
+  console.error('[Renderer] FATAL: houlaPrint bridge not found. Preload script may have failed.');
+}
+
 // ═══════════════════════════════════════════════════════
 // DOM references
 // ═══════════════════════════════════════════════════════
@@ -225,14 +230,27 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Button handlers
 // ═══════════════════════════════════════════════════════
 
-document.getElementById('btn-login').addEventListener('click', () => api.login());
-document.getElementById('btn-logout').addEventListener('click', () => api.logout());
-document.getElementById('btn-minimize').addEventListener('click', () => api.minimize());
-document.getElementById('btn-close').addEventListener('click', () => api.minimize());
-document.getElementById('btn-refresh-workspaces').addEventListener('click', () => api.refreshWorkspaces());
-document.getElementById('btn-refresh-printers').addEventListener('click', () => api.listPrinters());
-document.getElementById('btn-retry-all').addEventListener('click', () => api.retryAllFailed());
-document.getElementById('btn-open-dashboard').addEventListener('click', () => api.openExternal('https://app.hou.la/manager'));
+function bindBtn(id, handler) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      console.log(`[Renderer] Button clicked: ${id}`);
+      handler();
+    });
+  } else {
+    console.warn(`[Renderer] Button not found: ${id}`);
+  }
+}
+
+bindBtn('btn-login', () => api.login());
+bindBtn('btn-logout', () => api.logout());
+bindBtn('btn-minimize', () => api.minimize());
+bindBtn('btn-close', () => api.minimize());
+bindBtn('btn-refresh-workspaces', () => api.refreshWorkspaces());
+bindBtn('btn-refresh-printers', () => api.listPrinters());
+bindBtn('btn-retry-all', () => api.retryAllFailed());
+bindBtn('btn-open-dashboard', () => api.openExternal('https://app.hou.la/manager'));
 
 // ═══════════════════════════════════════════════════════
 // IPC listener: state updates from main process

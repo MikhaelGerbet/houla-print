@@ -11,11 +11,31 @@ import { ApiService } from './services/api.service';
 import { IPC, AppState } from '../shared/types';
 import { APP_NAME, APP_PROTOCOL } from '../shared/config';
 
+// Catch unhandled errors
+process.on('uncaughtException', (err) => {
+  console.error('[Main] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[Main] Unhandled rejection:', err);
+});
+
+console.log('[Main] Starting Hou.la Print...');
+
 // Single instance lock — prevent multiple windows
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
+
+// Disable GPU hardware acceleration to avoid Windows GPU cache errors
+// ("GPU state invalid after WaitForGetOffsetInRange")
+app.disableHardwareAcceleration();
+
+// Set app name so OS protocol handler dialog shows "Hou.la Print" instead of "Electron"
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.houla.print');
+}
+app.setName(APP_NAME);
 
 // Register custom protocol for OAuth callback
 if (process.defaultApp) {
@@ -24,6 +44,16 @@ if (process.defaultApp) {
   }
 } else {
   app.setAsDefaultProtocolClient(APP_PROTOCOL);
+}
+
+// In dev mode, patch Windows registry so browser shows "Hou.la Print" instead of "Electron"
+if (process.platform === 'win32' && process.defaultApp) {
+  try {
+    const { execSync } = require('child_process');
+    const regBase = `HKCU\\Software\\Classes\\${APP_PROTOCOL}`;
+    execSync(`reg add "${regBase}" /ve /d "URL:${APP_NAME}" /f`, { stdio: 'ignore' });
+    execSync(`reg add "${regBase}\\shell\\open" /v "FriendlyAppName" /d "${APP_NAME}" /f`, { stdio: 'ignore' });
+  } catch { /* non-critical */ }
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -38,6 +68,19 @@ let printer: PrinterService;
 let queue: QueueService;
 let workspaces: WorkspaceService;
 
+function getAppIcon(): Electron.NativeImage {
+  const pngPath = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(pngPath)) {
+      return nativeImage.createFromPath(pngPath);
+    }
+  } catch {
+    // Fallback
+  }
+  return nativeImage.createEmpty();
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 480,
@@ -49,19 +92,33 @@ function createWindow(): void {
     titleBarStyle: 'hidden',
     show: false,
     skipTaskbar: false,
-    icon: getTrayIcon(),
+    icon: getAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false, // Required so preload can require() shared modules
     },
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
-    // Don't show on startup — stay in tray
+    console.log('[Main] Window ready-to-show.');
+    // In dev mode, always show the window and open DevTools
+    if (detectEnv() === 'development') {
+      mainWindow?.show();
+      mainWindow?.webContents.openDevTools({ mode: 'detach' });
+    }
+    // In production, stay hidden in tray
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[Main] Renderer crashed:', details.reason, details.exitCode);
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription) => {
+    console.error('[Main] Failed to load:', errorCode, errorDescription);
   });
 
   mainWindow.on('close', (e) => {
@@ -72,13 +129,16 @@ function createWindow(): void {
 }
 
 function getTrayIcon(): Electron.NativeImage {
-  const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
+  const pngPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
   try {
-    return nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    const fs = require('fs');
+    if (fs.existsSync(pngPath)) {
+      return nativeImage.createFromPath(pngPath).resize({ width: 16, height: 16 });
+    }
   } catch {
-    // Fallback: empty 16x16 icon
-    return nativeImage.createEmpty();
+    // Fallback
   }
+  return nativeImage.createEmpty();
 }
 
 function createTray(): void {
@@ -143,10 +203,8 @@ function initServices(): void {
 function registerIpcHandlers(): void {
   // Auth
   ipcMain.handle(IPC.AUTH_LOGIN, async () => {
+    // Only open browser — token exchange + workspace sync happens in handleDeepLink()
     await auth.login();
-    await workspaces.refresh();
-    socket.connectAll(workspaces.getActiveWorkspaces());
-    broadcastState();
   });
 
   ipcMain.handle(IPC.AUTH_LOGOUT, async () => {
@@ -276,10 +334,29 @@ app.on('open-url', (_e, url) => {
 });
 
 app.whenReady().then(async () => {
-  initServices();
-  createWindow();
-  createTray();
+  console.log('[Main] App ready. Initializing...');
+  try {
+    initServices();
+    console.log('[Main] Services initialized.');
+  } catch (err) {
+    console.error('[Main] initServices failed:', err);
+    return;
+  }
+  try {
+    createWindow();
+    console.log('[Main] Window created.');
+  } catch (err) {
+    console.error('[Main] createWindow failed:', err);
+    return;
+  }
+  try {
+    createTray();
+    console.log('[Main] Tray created.');
+  } catch (err) {
+    console.error('[Main] createTray failed:', err);
+  }
   registerIpcHandlers();
+  console.log('[Main] IPC handlers registered.');
 
   // Initialize auto updater
   try {
@@ -289,29 +366,45 @@ app.whenReady().then(async () => {
   }
 
   // Auto-detect printers
-  await printer.detectPrinters();
+  try {
+    await printer.detectPrinters();
+    console.log('[Main] Printers detected.');
+  } catch (err) {
+    console.error('[Main] detectPrinters failed:', err);
+  }
 
   // If already authenticated, auto-connect
-  if (auth.isAuthenticated()) {
-    await workspaces.refresh();
-    socket.connectAll(workspaces.getActiveWorkspaces());
-    // Fetch pending jobs from API on startup
-    await queue.fetchPendingFromApi(workspaces.getActiveWorkspaces());
+  try {
+    if (auth.isAuthenticated()) {
+      await workspaces.refresh();
+      socket.connectAll(workspaces.getActiveWorkspaces());
+      await queue.fetchPendingFromApi(workspaces.getActiveWorkspaces());
+      console.log('[Main] Auto-reconnected.');
+    }
+  } catch (err) {
+    console.error('[Main] Auto-reconnect failed:', err);
   }
 
   broadcastState();
+  console.log('[Main] Init complete. App should stay running.');
 
   // Periodic printer detection (every 30s)
   setInterval(async () => {
-    await printer.detectPrinters();
+    try { await printer.detectPrinters(); } catch { /* ignore */ }
   }, 30_000);
 });
 
 app.on('window-all-closed', () => {
   // Keep running in tray — don't quit
+  console.log('[Main] window-all-closed event — ignoring, staying in tray.');
 });
 
 app.on('before-quit', () => {
+  console.log('[Main] before-quit event.');
   socket.disconnectAll();
   queue.close();
+});
+
+process.on('exit', (code) => {
+  console.log(`[Main] Process exiting with code: ${code}`);
 });

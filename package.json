@@ -7,8 +7,9 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "dev": "ts-node scripts/dev.ts",
+    "dev": "node scripts/dev.js",
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && node scripts/copy-renderer.js",
+    "generate-icons": "node scripts/generate-icons.js",
     "start": "electron dist/main/index.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
@@ -28,8 +29,11 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
+    "chokidar": "^5.0.0",
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

@@ -4,8 +4,8 @@ import { API_URLS, APP_URLS } from '../../shared/config';
 
 interface StoreSchema {
   // Auth
-  accessToken: string | null;
-  refreshToken: string | null;
+  accessToken: string;
+  refreshToken: string;
 
   // Workspaces with API keys
   workspaces: Record<string, {
@@ -43,8 +43,8 @@ export class StoreService {
       name: 'houla-print-config',
       encryptionKey: 'houla-print-v1',
       defaults: {
-        accessToken: null,
-        refreshToken: null,
+        accessToken: '',
+        refreshToken: '',
         workspaces: {},
         printerAssignments: DEFAULT_PRINTER_ASSIGNMENTS,
         printedTodayCount: 0,
@@ -61,24 +61,32 @@ export class StoreService {
   // ═══════════════════════════════════════════════════════
 
   getAccessToken(): string | null {
-    return this.store.get('accessToken');
+    return this.store.get('accessToken') || null;
   }
 
   setAccessToken(token: string | null): void {
-    this.store.set('accessToken', token);
+    if (token) {
+      this.store.set('accessToken', token);
+    } else {
+      this.store.delete('accessToken');
+    }
   }
 
   getRefreshToken(): string | null {
-    return this.store.get('refreshToken');
+    return this.store.get('refreshToken') || null;
   }
 
   setRefreshToken(token: string | null): void {
-    this.store.set('refreshToken', token);
+    if (token) {
+      this.store.set('refreshToken', token);
+    } else {
+      this.store.delete('refreshToken');
+    }
   }
 
   clearAuth(): void {
-    this.store.set('accessToken', null);
-    this.store.set('refreshToken', null);
+    this.store.delete('accessToken');
+    this.store.delete('refreshToken');
     this.store.set('workspaces', {});
   }
 
