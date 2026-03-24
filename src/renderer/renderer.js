@@ -27,6 +27,7 @@ const $statToday = document.getElementById('stat-today');
 const $workspaceList = document.getElementById('workspace-list');
 const $printerList = document.getElementById('printer-list');
 const $assignmentList = document.getElementById('assignment-list');
+const $labelSizeList = document.getElementById('label-size-list');
 const $errorBanner = document.getElementById('error-banner');
 const $errorText = document.getElementById('error-text');
 const $envBadge = document.getElementById('env-badge');
@@ -37,8 +38,7 @@ const JOB_TYPE_LABELS = {
   product_label: 'Étiquettes produits',
   order_summary: 'Récapitulatif commande',
   invoice: 'Facture',
-  shipping_label: 'Étiquette expédition',
-  packing_slip: 'Bordereau de livraison',
+  // shipping_label and packing_slip: disabled until shipping module is implemented
 };
 
 const PRINTER_TYPE_ICONS = {
@@ -47,6 +47,15 @@ const PRINTER_TYPE_ICONS = {
   standard: '🖨️',
   unknown: '❓',
 };
+
+const LABEL_SIZE_OPTIONS = [
+  { value: '57x32',   label: '57 × 32 mm — Standard' },
+  { value: '40x30',   label: '40 × 30 mm — Petit (bijoux)' },
+  { value: '50x25',   label: '50 × 25 mm — Compact' },
+  { value: '100x50',  label: '100 × 50 mm — Moyen' },
+  { value: '100x100', label: '100 × 100 mm — Grand carré' },
+  { value: '100x150', label: '100 × 150 mm — Expédition (6×4")' },
+];
 
 // ═══════════════════════════════════════════════════════
 // State management
@@ -100,6 +109,7 @@ function updateUI(state) {
   renderWorkspaces(state.workspaces);
   renderPrinters(state.printers);
   renderAssignments(state.printerAssignments, state.printers);
+  renderLabelSizes(state.workspaces);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -107,12 +117,15 @@ function updateUI(state) {
 // ═══════════════════════════════════════════════════════
 
 function renderWorkspaces(workspaces) {
-  if (!workspaces || workspaces.length === 0) {
+  // Only show workspaces that have an active shop
+  const shopWorkspaces = (workspaces || []).filter(ws => ws.workspace.hasShop);
+
+  if (shopWorkspaces.length === 0) {
     $workspaceList.innerHTML = '<div class="empty-state">Aucune boutique trouvée</div>';
     return;
   }
 
-  $workspaceList.innerHTML = workspaces.map(ws => `
+  $workspaceList.innerHTML = shopWorkspaces.map(ws => `
     <div class="card">
       <div class="card-icon">🏪</div>
       <div class="card-body">
@@ -210,6 +223,48 @@ function renderAssignments(assignments, printers) {
 // Tab navigation
 // ═══════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════
+// Label size per workspace
+// ═══════════════════════════════════════════════════════
+
+function renderLabelSizes(workspaces) {
+  const shopWorkspaces = (workspaces || []).filter(ws => ws.workspace.hasShop && ws.enabled);
+
+  if (shopWorkspaces.length === 0) {
+    $labelSizeList.innerHTML = '<div class="empty-state">Activez une boutique pour configurer le format</div>';
+    return;
+  }
+
+  const sizeOptions = LABEL_SIZE_OPTIONS
+    .map(o => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`)
+    .join('');
+
+  $labelSizeList.innerHTML = shopWorkspaces.map(ws => {
+    const currentSize = ws.config?.productLabelSize || '57x32';
+    return `
+      <div class="assignment-item">
+        <span class="assignment-label">${escapeHtml(ws.workspace.name)}</span>
+        <select class="assignment-select" data-ws-label-size="${ws.workspace.id}">
+          ${sizeOptions}
+        </select>
+      </div>
+    `;
+  }).join('');
+
+  // Set current values and bind change events
+  $labelSizeList.querySelectorAll('select').forEach(el => {
+    const wsId = el.dataset.wsLabelSize;
+    const ws = shopWorkspaces.find(w => w.workspace.id === wsId);
+    el.value = ws?.config?.productLabelSize || '57x32';
+
+    el.addEventListener('change', (e) => {
+      api.updateWorkspaceConfig(wsId, { productLabelSize: e.target.value });
+    });
+  });
+}
+
+
+
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     // Remove active from all tabs
@@ -250,7 +305,10 @@ bindBtn('btn-close', () => api.minimize());
 bindBtn('btn-refresh-workspaces', () => api.refreshWorkspaces());
 bindBtn('btn-refresh-printers', () => api.listPrinters());
 bindBtn('btn-retry-all', () => api.retryAllFailed());
-bindBtn('btn-open-dashboard', () => api.openExternal('https://app.hou.la/manager'));
+bindBtn('btn-open-dashboard', () => {
+  const appUrl = currentState?.appUrl || 'https://app.hou.la';
+  api.openExternal(`${appUrl}/manager`);
+});
 
 // ═══════════════════════════════════════════════════════
 // IPC listener: state updates from main process

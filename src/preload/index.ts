@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('houlaPrint', {
   toggleWorkspace: (workspaceId: string, enabled: boolean) =>
     ipcRenderer.invoke(IPC.WORKSPACE_TOGGLE, workspaceId, enabled),
   refreshWorkspaces: () => ipcRenderer.invoke(IPC.WORKSPACE_REFRESH),
+  updateWorkspaceConfig: (workspaceId: string, config: Record<string, unknown>) =>
+    ipcRenderer.invoke(IPC.WORKSPACE_UPDATE_CONFIG, workspaceId, config),
 
   // Printers
   listPrinters: () => ipcRenderer.invoke(IPC.PRINTER_LIST),

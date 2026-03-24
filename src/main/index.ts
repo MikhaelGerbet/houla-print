@@ -69,9 +69,15 @@ let queue: QueueService;
 let workspaces: WorkspaceService;
 
 function getAppIcon(): Electron.NativeImage {
-  const pngPath = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+  const assetsDir = path.join(__dirname, '..', '..', 'assets');
+  // Prefer .ico on Windows for better taskbar rendering
+  const icoPath = path.join(assetsDir, 'icon.ico');
+  const pngPath = path.join(assetsDir, 'icon.png');
   try {
     const fs = require('fs');
+    if (process.platform === 'win32' && fs.existsSync(icoPath)) {
+      return nativeImage.createFromPath(icoPath);
+    }
     if (fs.existsSync(pngPath)) {
       return nativeImage.createFromPath(pngPath);
     }
@@ -234,6 +240,11 @@ function registerIpcHandlers(): void {
     broadcastState();
   });
 
+  ipcMain.handle(IPC.WORKSPACE_UPDATE_CONFIG, async (_e, workspaceId: string, config: Record<string, unknown>) => {
+    await workspaces.updateConfig(workspaceId, config);
+    broadcastState();
+  });
+
   // Printers
   ipcMain.handle(IPC.PRINTER_LIST, () => printer.detectPrinters());
   ipcMain.handle(IPC.PRINTER_ASSIGN, (_e, jobType: string, printerName: string | null) => {
@@ -274,7 +285,8 @@ function getAppState(): AppState {
   return {
     authenticated: auth.isAuthenticated(),
     connected: socket.isConnected(),
-    workspaces: workspaces.getAll(),
+    // Strip apiKey from workspace states — renderer doesn't need them
+    workspaces: workspaces.getAll().map(ws => ({ ...ws, apiKey: '' })),
     printers: printer.getLastDetected(),
     printerAssignments: store.getPrinterAssignments(),
     pendingJobsCount: queue.getPendingCount(),
@@ -335,6 +347,12 @@ app.on('open-url', (_e, url) => {
 
 app.whenReady().then(async () => {
   console.log('[Main] App ready. Initializing...');
+
+  // Auto-start on boot (production only)
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+  }
+
   try {
     initServices();
     console.log('[Main] Services initialized.');

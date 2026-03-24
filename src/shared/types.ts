@@ -3,6 +3,16 @@
 export type PrintJobType = 'product_label' | 'order_summary' | 'invoice' | 'shipping_label' | 'packing_slip';
 export type PrintJobStatus = 'pending' | 'sent' | 'printed' | 'failed' | 'cancelled';
 export type PrintLabelFormat = 'zpl' | 'pdf' | 'escpos' | 'png';
+export type PrintLabelSize = '57x32' | '40x30' | '50x25' | '100x50' | '100x100' | '100x150';
+
+export const LABEL_SIZE_OPTIONS: { value: PrintLabelSize; label: string }[] = [
+  { value: '57x32',   label: '57 × 32 mm — Standard' },
+  { value: '40x30',   label: '40 × 30 mm — Petit (bijoux)' },
+  { value: '50x25',   label: '50 × 25 mm — Compact' },
+  { value: '100x50',  label: '100 × 50 mm — Moyen' },
+  { value: '100x100', label: '100 × 100 mm — Grand carré' },
+  { value: '100x150', label: '100 × 150 mm — Expédition (6×4")' },
+];
 
 export interface PrintJob {
   id: string;
@@ -32,6 +42,7 @@ export interface PrintConfig {
   autoShippingLabel: boolean;
   autoPackingSlip: boolean;
   productLabelTemplate: 'standard' | 'minimal' | 'detailed';
+  productLabelSize: PrintLabelSize;
   brandName: string | null;
 }
 
@@ -41,6 +52,7 @@ export interface Workspace {
   type: string;
   avatarUrl: string | null;
   plan: string;
+  hasShop?: boolean;
 }
 
 export interface WorkspaceState {
@@ -97,6 +109,7 @@ export const IPC = {
   // Workspaces
   WORKSPACE_TOGGLE: 'workspace:toggle',
   WORKSPACE_REFRESH: 'workspace:refresh',
+  WORKSPACE_UPDATE_CONFIG: 'workspace:update-config',
 
   // Printers
   PRINTER_LIST: 'printer:list',

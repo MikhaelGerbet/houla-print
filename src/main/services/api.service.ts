@@ -34,6 +34,10 @@ export class ApiService {
     return this.fetchWithApiKey('GET', '/api/print/config', apiKey);
   }
 
+  async updatePrintConfig(apiKey: string, config: Partial<PrintConfig>): Promise<PrintConfig> {
+    return this.fetchWithApiKey('PATCH', '/api/print/config', apiKey, config);
+  }
+
   async getPendingJobs(apiKey: string): Promise<PrintJob[]> {
     return this.fetchWithApiKey('GET', '/api/print/jobs?status=pending', apiKey);
   }

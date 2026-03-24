@@ -85,6 +85,16 @@ export class WorkspaceService {
     });
   }
 
+  /**
+   * Update the print config for a workspace via the API.
+   */
+  async updateConfig(workspaceId: string, configUpdate: Partial<PrintConfig>): Promise<void> {
+    const state = this.workspaceStates.get(workspaceId);
+    if (!state || !state.apiKey) return;
+    const updated = await this.api.updatePrintConfig(state.apiKey, configUpdate);
+    state.config = updated;
+  }
+
   getAll(): WorkspaceState[] {
     return Array.from(this.workspaceStates.values());
   }

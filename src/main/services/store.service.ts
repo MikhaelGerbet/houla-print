@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import { safeStorage } from 'electron';
 import { PrinterAssignments, WorkspaceState } from '../../shared/types';
 import { API_URLS, APP_URLS } from '../../shared/config';
 
@@ -41,7 +42,7 @@ export class StoreService {
   constructor() {
     this.store = new Store<StoreSchema>({
       name: 'houla-print-config',
-      encryptionKey: 'houla-print-v1',
+      // No encryptionKey — sensitive fields use Electron safeStorage (DPAPI/Keychain)
       defaults: {
         accessToken: '',
         refreshToken: '',
@@ -56,29 +57,54 @@ export class StoreService {
     });
   }
 
+  // OS-level encryption for sensitive values (DPAPI on Windows, Keychain on macOS)
+  private encrypt(value: string): string {
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.encryptString(value).toString('base64');
+    }
+    return value;
+  }
+
+  private decrypt(value: string): string {
+    if (!value) return '';
+    if (safeStorage.isEncryptionAvailable()) {
+      try {
+        return safeStorage.decryptString(Buffer.from(value, 'base64'));
+      } catch {
+        // Value stored before encryption was available — return as-is
+        return value;
+      }
+    }
+    return value;
+  }
+
   // ═══════════════════════════════════════════════════════
   // Auth
   // ═══════════════════════════════════════════════════════
 
   getAccessToken(): string | null {
-    return this.store.get('accessToken') || null;
+    const encrypted = this.store.get('accessToken');
+    const value = this.decrypt(encrypted);
+    return value || null;
   }
 
   setAccessToken(token: string | null): void {
     if (token) {
-      this.store.set('accessToken', token);
+      this.store.set('accessToken', this.encrypt(token));
     } else {
       this.store.delete('accessToken');
     }
   }
 
   getRefreshToken(): string | null {
-    return this.store.get('refreshToken') || null;
+    const encrypted = this.store.get('refreshToken');
+    const value = this.decrypt(encrypted);
+    return value || null;
   }
 
   setRefreshToken(token: string | null): void {
     if (token) {
-      this.store.set('refreshToken', token);
+      this.store.set('refreshToken', this.encrypt(token));
     } else {
       this.store.delete('refreshToken');
     }
@@ -95,12 +121,21 @@ export class StoreService {
   // ═══════════════════════════════════════════════════════
 
   getWorkspaces(): Record<string, { apiKey: string; enabled: boolean; workspaceName: string }> {
-    return this.store.get('workspaces');
+    const raw = this.store.get('workspaces');
+    // Decrypt API keys
+    const result: Record<string, { apiKey: string; enabled: boolean; workspaceName: string }> = {};
+    for (const [id, ws] of Object.entries(raw)) {
+      result[id] = { ...ws, apiKey: ws.apiKey ? this.decrypt(ws.apiKey) : '' };
+    }
+    return result;
   }
 
   setWorkspace(workspaceId: string, data: { apiKey: string; enabled: boolean; workspaceName: string }): void {
-    const all = this.getWorkspaces();
-    all[workspaceId] = data;
+    const all = this.store.get('workspaces');
+    all[workspaceId] = {
+      ...data,
+      apiKey: data.apiKey ? this.encrypt(data.apiKey) : '',
+    };
     this.store.set('workspaces', all);
   }
 

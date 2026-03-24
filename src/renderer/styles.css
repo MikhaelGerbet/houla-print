@@ -255,6 +255,9 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .status-dot {
@@ -288,6 +291,10 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 0 16px;
   flex-shrink: 0;
+  position: sticky;
+  top: 38px; /* height of status-bar */
+  z-index: 10;
+  background: var(--bg-card);
 }
 
 .tab {
@@ -409,8 +416,10 @@ body {
 /* Toggle switch */
 .toggle {
   position: relative;
+  display: inline-block;
   width: 36px;
   height: 20px;
+  flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -418,6 +427,7 @@ body {
   opacity: 0;
   width: 0;
   height: 0;
+  position: absolute;
 }
 
 .toggle-slider {
