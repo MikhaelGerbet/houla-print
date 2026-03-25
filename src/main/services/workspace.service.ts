@@ -95,6 +95,16 @@ export class WorkspaceService {
     state.config = updated;
   }
 
+  /**
+   * Apply a remote config update received via WebSocket (from manager dashboard).
+   */
+  applyRemoteConfig(workspaceId: string, config: PrintConfig): void {
+    const state = this.workspaceStates.get(workspaceId);
+    if (!state) return;
+    state.config = config;
+    console.log(`[Workspaces] Remote config applied for workspace:${workspaceId}`);
+  }
+
   getAll(): WorkspaceState[] {
     return Array.from(this.workspaceStates.values());
   }

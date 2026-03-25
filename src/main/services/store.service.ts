@@ -1,5 +1,7 @@
 import Store from 'electron-store';
-import { safeStorage } from 'electron';
+import { app, safeStorage } from 'electron';
+import { existsSync, unlinkSync } from 'fs';
+import { join } from 'path';
 import { PrinterAssignments, WorkspaceState } from '../../shared/types';
 import { API_URLS, APP_URLS } from '../../shared/config';
 
@@ -28,33 +30,47 @@ interface StoreSchema {
   env: 'production' | 'development';
 }
 
-const DEFAULT_PRINTER_ASSIGNMENTS: PrinterAssignments = {
-  product_label: null,
-  order_summary: null,
-  invoice: null,
-  shipping_label: null,
-  packing_slip: null,
+const STORE_DEFAULTS: StoreSchema = {
+  accessToken: '',
+  refreshToken: '',
+  workspaces: {},
+  printerAssignments: {
+    product_label: null,
+    order_summary: null,
+    invoice: null,
+    shipping_label: null,
+    packing_slip: null,
+  },
+  printedTodayCount: 0,
+  printedTodayDate: new Date().toISOString().split('T')[0],
+  apiUrl: API_URLS.production,
+  appUrl: APP_URLS.production,
+  env: 'production',
+};
+
+const STORE_OPTIONS = {
+  name: 'houla-print-config',
+  defaults: STORE_DEFAULTS,
 };
 
 export class StoreService {
   private store: Store<StoreSchema>;
 
   constructor() {
-    this.store = new Store<StoreSchema>({
-      name: 'houla-print-config',
-      // No encryptionKey — sensitive fields use Electron safeStorage (DPAPI/Keychain)
-      defaults: {
-        accessToken: '',
-        refreshToken: '',
-        workspaces: {},
-        printerAssignments: DEFAULT_PRINTER_ASSIGNMENTS,
-        printedTodayCount: 0,
-        printedTodayDate: new Date().toISOString().split('T')[0],
-        apiUrl: API_URLS.production,
-        appUrl: APP_URLS.production,
-        env: 'production',
-      },
-    });
+    // Migration: old versions used encryptionKey which encrypted the entire file.
+    // After removing encryptionKey, the old file is unreadable binary — delete and start fresh.
+    try {
+      this.store = new Store<StoreSchema>(STORE_OPTIONS);
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        const configPath = join(app.getPath('userData'), `${STORE_OPTIONS.name}.json`);
+        console.warn(`[StoreService] Corrupted config file detected, resetting: ${configPath}`);
+        if (existsSync(configPath)) unlinkSync(configPath);
+        this.store = new Store<StoreSchema>(STORE_OPTIONS);
+      } else {
+        throw err;
+      }
+    }
   }
 
   // OS-level encryption for sensitive values (DPAPI on Windows, Keychain on macOS)

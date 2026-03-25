@@ -19,8 +19,8 @@ export const WS_PATH = '/ws';
 export const OAUTH_CLIENT_ID = 'houla-print-desktop';
 
 // Job type → printer classification hint
-export const JOB_TYPE_PRINTER_HINT: Record<string, 'thermal' | 'receipt' | 'standard'> = {
-  product_label: 'thermal',
+export const JOB_TYPE_PRINTER_HINT: Record<string, 'thermal' | 'receipt' | 'standard' | 'niimbot'> = {
+  product_label: 'thermal', // or 'niimbot' — user assigns in UI
   order_summary: 'receipt',
   invoice: 'standard',
   shipping_label: 'thermal',

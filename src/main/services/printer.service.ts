@@ -1,35 +1,88 @@
 import { BrowserWindow, Notification } from 'electron';
 import { PrinterInfo } from '../../shared/types';
+import { NiimbotService, NiimbotDeviceInfo, renderProductLabel, LabelContent } from './niimbot';
+import { DEFAULT_MODEL, NIIMBOT_MODELS, NiimbotModelSpec } from './niimbot/niimbot-protocol';
 
 // Zebra / thermal printer name patterns
 const THERMAL_PATTERNS = [/zebra/i, /zd[24]\d{2}/i, /gk4\d{2}/i, /gx4\d{2}/i, /zt[24]\d{2}/i, /brother\s*ql/i, /dymo/i];
 // Receipt printer patterns
 const RECEIPT_PATTERNS = [/epson\s*tm/i, /star\s*(tsp|sp)/i, /bixolon/i, /citizen\s*ct/i, /pos[-\s]?58/i, /pos[-\s]?80/i];
+// Niimbot patterns (matched against OS printer names)
+const NIIMBOT_PATTERNS = [/niimbot/i, /niim/i];
 
 /**
  * Detects system printers, classifies them, and handles raw printing.
+ * Also manages Niimbot thermal label printers via serial port.
  */
 export class PrinterService {
   private detectedPrinters: PrinterInfo[] = [];
+  private niimbot: NiimbotService = new NiimbotService();
+  private niimbotDevices: NiimbotDeviceInfo[] = [];
+  private connectedNiimbotPort: string | null = null;
 
   /**
-   * Detect all system printers via Electron's webContents API.
+   * Detect all system printers via Electron's webContents API + Niimbot serial ports.
    */
   async detectPrinters(): Promise<PrinterInfo[]> {
     const win = BrowserWindow.getAllWindows()[0];
-    if (!win) return this.detectedPrinters;
+    const osPrinters: PrinterInfo[] = [];
 
-    const rawPrinters = await (win.webContents as any).getPrintersAsync() as Electron.PrinterInfo[];
+    if (win) {
+      const rawPrinters = await (win.webContents as any).getPrintersAsync() as Electron.PrinterInfo[];
+      for (const p of rawPrinters) {
+        osPrinters.push({
+          name: p.name,
+          displayName: p.displayName || p.name,
+          isDefault: p.isDefault,
+          status: p.status,
+          description: p.description || '',
+          type: this.classifyPrinter(p.name, p.description || ''),
+        });
+      }
+    }
 
-    this.detectedPrinters = rawPrinters.map((p: Electron.PrinterInfo) => ({
-      name: p.name,
-      displayName: p.displayName || p.name,
-      isDefault: p.isDefault,
-      status: p.status,
-      description: p.description || '',
-      type: this.classifyPrinter(p.name, p.description || ''),
-    }));
+    // Discover Niimbot printers on serial ports
+    try {
+      this.niimbotDevices = await this.niimbot.discover();
+      for (const dev of this.niimbotDevices) {
+        // Avoid duplicates if already listed as OS printer
+        const alreadyListed = osPrinters.some(p => p.name === dev.port);
+        if (!alreadyListed) {
+          osPrinters.push({
+            name: `niimbot:${dev.port}`,
+            displayName: `Niimbot (${dev.port})${dev.friendlyName ? ' — ' + dev.friendlyName : ''}`,
+            isDefault: false,
+            status: 0,
+            description: `Niimbot via ${dev.port}`,
+            type: 'niimbot',
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[Printer] Niimbot discovery failed:', (err as Error).message);
+    }
 
+    // Also list all available serial ports as potential Niimbot devices
+    try {
+      const allPorts = await this.niimbot.listAllPorts();
+      for (const p of allPorts) {
+        const alreadyListed = osPrinters.some(pr =>
+          pr.name === `niimbot:${p.port}` || pr.name === p.port);
+        if (!alreadyListed && p.manufacturer) {
+          // Show COM ports that have a manufacturer (likely real devices, not internal)
+          osPrinters.push({
+            name: `niimbot:${p.port}`,
+            displayName: `${p.manufacturer || 'Serial'} (${p.port})`,
+            isDefault: false,
+            status: 0,
+            description: `Serial port ${p.port} — ${p.manufacturer || 'unknown'}`,
+            type: 'niimbot',
+          });
+        }
+      }
+    } catch { /* ignore serial listing errors */ }
+
+    this.detectedPrinters = osPrinters;
     return this.detectedPrinters;
   }
 
@@ -42,6 +95,7 @@ export class PrinterService {
    */
   private classifyPrinter(name: string, description: string): PrinterInfo['type'] {
     const combined = `${name} ${description}`;
+    if (NIIMBOT_PATTERNS.some(p => p.test(combined))) return 'niimbot';
     if (THERMAL_PATTERNS.some(p => p.test(combined))) return 'thermal';
     if (RECEIPT_PATTERNS.some(p => p.test(combined))) return 'receipt';
     return 'standard';
@@ -110,7 +164,9 @@ export class PrinterService {
     if (!printer) return { success: false, error: 'Imprimante non trouvée' };
 
     try {
-      if (printer.type === 'thermal') {
+      if (printer.type === 'niimbot') {
+        return await this.testPrintNiimbot(printerName);
+      } else if (printer.type === 'thermal') {
         // ZPL test label
         const testZpl = `^XA
 ^FO20,20^A0N,40,40^FDHou.la Print^FS
@@ -146,6 +202,75 @@ export class PrinterService {
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };
     }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Niimbot printing
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Print a product label on a Niimbot printer.
+   * Connects, renders the label as a monochrome bitmap, sends it, and disconnects.
+   */
+  async printNiimbot(
+    printerName: string,
+    content: LabelContent,
+    labelSize: import('../../shared/types').PrintLabelSize = '40x30',
+    model: NiimbotModelSpec = DEFAULT_MODEL,
+  ): Promise<void> {
+    const portPath = this.extractNiimbotPort(printerName);
+
+    try {
+      if (!this.niimbot.isConnected() || this.connectedNiimbotPort !== portPath) {
+        await this.niimbot.connect(portPath);
+        this.connectedNiimbotPort = portPath;
+      }
+
+      const label = renderProductLabel(content, labelSize, model);
+      const result = await this.niimbot.printBitmap(
+        label.bitmap, label.widthDots, label.heightDots,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Niimbot print failed');
+      }
+    } finally {
+      // Keep connection open for subsequent prints (disconnect on idle via timer)
+    }
+  }
+
+  /**
+   * Test print on a Niimbot printer.
+   */
+  private async testPrintNiimbot(printerName: string): Promise<{ success: boolean; error?: string }> {
+    const portPath = this.extractNiimbotPort(printerName);
+
+    try {
+      await this.niimbot.connect(portPath);
+      this.connectedNiimbotPort = portPath;
+      const result = await this.niimbot.testPrint();
+      return result;
+    } catch (err: any) {
+      return { success: false, error: err.message || String(err) };
+    }
+  }
+
+  /**
+   * Get the Niimbot service instance (for advanced operations).
+   */
+  getNiimbotService(): NiimbotService {
+    return this.niimbot;
+  }
+
+  /**
+   * Extract the serial port path from a niimbot printer name.
+   * Format: "niimbot:COM3" → "COM3"
+   */
+  private extractNiimbotPort(printerName: string): string {
+    if (printerName.startsWith('niimbot:')) {
+      return printerName.substring('niimbot:'.length);
+    }
+    return printerName;
   }
 
   // ═══════════════════════════════════════════════════════

@@ -71,6 +71,13 @@ export class SocketService {
       this.onStateChange();
     });
 
+    // Config updated from manager dashboard — sync local state
+    socket.on('print:config-updated', (data: { config: any }) => {
+      console.log(`[WS] Config updated for workspace:${workspaceId}`);
+      this.workspaces.applyRemoteConfig(workspaceId, data.config);
+      this.onStateChange();
+    });
+
     socket.on('error', (err: string) => {
       console.error(`[WS] Error for workspace:${workspaceId}:`, err);
     });

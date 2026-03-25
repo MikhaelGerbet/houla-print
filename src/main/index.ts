@@ -58,6 +58,8 @@ if (process.platform === 'win32' && process.defaultApp) {
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let lastConnectionError: string | null = null;
+let retryTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Services
 let store: StoreService;
@@ -69,25 +71,48 @@ let queue: QueueService;
 let workspaces: WorkspaceService;
 
 function getAppIcon(): Electron.NativeImage {
-  const assetsDir = path.join(__dirname, '..', '..', 'assets');
-  // Prefer .ico on Windows for better taskbar rendering
-  const icoPath = path.join(assetsDir, 'icon.ico');
-  const pngPath = path.join(assetsDir, 'icon.png');
-  try {
-    const fs = require('fs');
-    if (process.platform === 'win32' && fs.existsSync(icoPath)) {
-      return nativeImage.createFromPath(icoPath);
-    }
-    if (fs.existsSync(pngPath)) {
-      return nativeImage.createFromPath(pngPath);
-    }
-  } catch {
-    // Fallback
+  // Try root assets/ first, then dist/assets/ as fallback
+  const dirs = [
+    path.join(__dirname, '..', '..', 'assets'),
+    path.join(__dirname, '..', 'assets'),
+  ];
+  const fs = require('fs');
+  for (const dir of dirs) {
+    // On Windows use the 256px PNG for best taskbar quality (ico can be buggy with nativeImage)
+    const png256 = path.join(dir, 'icon-256.png');
+    const icoPath = path.join(dir, 'icon.ico');
+    const pngPath = path.join(dir, 'icon.png');
+    try {
+      // Prefer the 256px PNG — Windows taskbar uses 48px+ and downscales
+      if (process.platform === 'win32' && fs.existsSync(png256)) {
+        const img = nativeImage.createFromPath(png256);
+        if (!img.isEmpty()) {
+          console.log('[Main] App icon loaded from', png256);
+          return img;
+        }
+      }
+      if (process.platform === 'win32' && fs.existsSync(icoPath)) {
+        const img = nativeImage.createFromPath(icoPath);
+        if (!img.isEmpty()) {
+          console.log('[Main] App icon loaded from', icoPath);
+          return img;
+        }
+      }
+      if (fs.existsSync(pngPath)) {
+        const img = nativeImage.createFromPath(pngPath);
+        if (!img.isEmpty()) {
+          console.log('[Main] App icon loaded from', pngPath);
+          return img;
+        }
+      }
+    } catch { /* continue to next dir */ }
   }
+  console.warn('[Main] No app icon found in:', dirs);
   return nativeImage.createEmpty();
 }
 
 function createWindow(): void {
+  const appIcon = getAppIcon();
   mainWindow = new BrowserWindow({
     width: 480,
     height: 680,
@@ -98,7 +123,7 @@ function createWindow(): void {
     titleBarStyle: 'hidden',
     show: false,
     skipTaskbar: false,
-    icon: getAppIcon(),
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -106,6 +131,11 @@ function createWindow(): void {
       sandbox: false, // Required so preload can require() shared modules
     },
   });
+
+  // Force-set icon again after creation (Windows taskbar needs this in dev mode)
+  if (!appIcon.isEmpty()) {
+    mainWindow.setIcon(appIcon);
+  }
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
@@ -135,15 +165,21 @@ function createWindow(): void {
 }
 
 function getTrayIcon(): Electron.NativeImage {
-  const pngPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
-  try {
-    const fs = require('fs');
-    if (fs.existsSync(pngPath)) {
-      return nativeImage.createFromPath(pngPath).resize({ width: 16, height: 16 });
-    }
-  } catch {
-    // Fallback
+  const dirs = [
+    path.join(__dirname, '..', '..', 'assets'),
+    path.join(__dirname, '..', 'assets'),
+  ];
+  const fs = require('fs');
+  for (const dir of dirs) {
+    const pngPath = path.join(dir, 'tray-icon.png');
+    try {
+      if (fs.existsSync(pngPath)) {
+        const img = nativeImage.createFromPath(pngPath).resize({ width: 16, height: 16 });
+        if (!img.isEmpty()) return img;
+      }
+    } catch { /* continue to next dir */ }
   }
+  console.warn('[Main] No tray icon found');
   return nativeImage.createEmpty();
 }
 
@@ -206,6 +242,53 @@ function initServices(): void {
   socket = new SocketService(store, queue, workspaces, () => broadcastState());
 }
 
+function isNetworkError(err: unknown): boolean {
+  if (err instanceof TypeError && (err as any).cause?.code === 'ECONNREFUSED') return true;
+  if (err instanceof TypeError && err.message === 'fetch failed') return true;
+  if (err instanceof Error && err.message.includes('ECONNREFUSED')) return true;
+  if (err instanceof Error && err.message.includes('ENOTFOUND')) return true;
+  if (err instanceof Error && err.message.includes('ETIMEDOUT')) return true;
+  return false;
+}
+
+function setConnectionError(err: unknown): void {
+  if (isNetworkError(err)) {
+    lastConnectionError = `API indisponible (${store.getApiUrl()}). Vérifiez que le serveur est démarré.`;
+  } else if (err instanceof Error) {
+    lastConnectionError = err.message;
+  }
+  broadcastState();
+}
+
+function clearConnectionError(): void {
+  if (lastConnectionError) {
+    lastConnectionError = null;
+    broadcastState();
+  }
+}
+
+/** Schedule an auto-retry to reconnect when the API becomes available */
+function scheduleRetry(delaySec = 15): void {
+  if (retryTimeout) return; // already scheduled
+  console.log(`[Main] Will retry connection in ${delaySec}s...`);
+  retryTimeout = setTimeout(async () => {
+    retryTimeout = null;
+    if (!auth.isAuthenticated()) return;
+    try {
+      await workspaces.refresh();
+      clearConnectionError();
+      socket.connectAll(workspaces.getActiveWorkspaces());
+      await queue.fetchPendingFromApi(workspaces.getActiveWorkspaces());
+      console.log('[Main] Retry succeeded — reconnected.');
+      broadcastState();
+    } catch (err) {
+      console.error('[Main] Retry failed:', (err as Error).message);
+      setConnectionError(err);
+      scheduleRetry(30); // back off
+    }
+  }, delaySec * 1000);
+}
+
 function registerIpcHandlers(): void {
   // Auth
   ipcMain.handle(IPC.AUTH_LOGIN, async () => {
@@ -226,22 +309,41 @@ function registerIpcHandlers(): void {
 
   // Workspaces
   ipcMain.handle(IPC.WORKSPACE_TOGGLE, async (_e, workspaceId: string, enabled: boolean) => {
-    await workspaces.toggle(workspaceId, enabled);
-    if (enabled) {
-      socket.connect(workspaceId, workspaces.getApiKey(workspaceId));
-    } else {
-      socket.disconnect(workspaceId);
+    try {
+      await workspaces.toggle(workspaceId, enabled);
+      if (enabled) {
+        socket.connect(workspaceId, workspaces.getApiKey(workspaceId));
+      } else {
+        socket.disconnect(workspaceId);
+      }
+      clearConnectionError();
+    } catch (err) {
+      console.error('[Main] workspace:toggle failed:', (err as Error).message);
+      setConnectionError(err);
     }
     broadcastState();
   });
 
   ipcMain.handle(IPC.WORKSPACE_REFRESH, async () => {
-    await workspaces.refresh();
+    try {
+      await workspaces.refresh();
+      clearConnectionError();
+    } catch (err) {
+      console.error('[Main] workspace:refresh failed:', (err as Error).message);
+      setConnectionError(err);
+      if (isNetworkError(err)) scheduleRetry();
+    }
     broadcastState();
   });
 
   ipcMain.handle(IPC.WORKSPACE_UPDATE_CONFIG, async (_e, workspaceId: string, config: Record<string, unknown>) => {
-    await workspaces.updateConfig(workspaceId, config);
+    try {
+      await workspaces.updateConfig(workspaceId, config);
+      clearConnectionError();
+    } catch (err) {
+      console.error('[Main] workspace:update-config failed:', (err as Error).message);
+      setConnectionError(err);
+    }
     broadcastState();
   });
 
@@ -282,16 +384,29 @@ function registerIpcHandlers(): void {
 }
 
 function getAppState(): AppState {
+  const isSocketConnected = socket.isConnected();
+  const hasEnabledWorkspace = workspaces.getAll().some(ws => ws.enabled);
+  let connectionStatus: AppState['connectionStatus'];
+  if (lastConnectionError) {
+    connectionStatus = 'error';
+  } else if (isSocketConnected) {
+    connectionStatus = 'connected';
+  } else if (!hasEnabledWorkspace) {
+    connectionStatus = 'no-workspace';
+  } else {
+    connectionStatus = 'disconnected';
+  }
+
   return {
     authenticated: auth.isAuthenticated(),
-    connected: socket.isConnected(),
-    // Strip apiKey from workspace states — renderer doesn't need them
+    connected: isSocketConnected,
+    connectionStatus,
     workspaces: workspaces.getAll().map(ws => ({ ...ws, apiKey: '' })),
     printers: printer.getLastDetected(),
     printerAssignments: store.getPrinterAssignments(),
     pendingJobsCount: queue.getPendingCount(),
     printedTodayCount: queue.getPrintedTodayCount(),
-    lastError: queue.getLastError(),
+    lastError: lastConnectionError || queue.getLastError(),
     env: store.getEnv(),
     apiUrl: store.getApiUrl(),
     appUrl: store.getAppUrl(),
@@ -312,8 +427,15 @@ function updateTrayTooltip(): void {
 // Handle deep link (houla-print://callback?code=...)
 function handleDeepLink(url: string): void {
   auth.handleOAuthCallback(url).then(async () => {
-    await workspaces.refresh();
-    socket.connectAll(workspaces.getActiveWorkspaces());
+    try {
+      await workspaces.refresh();
+      clearConnectionError();
+      socket.connectAll(workspaces.getActiveWorkspaces());
+    } catch (err) {
+      console.error('[Main] Post-OAuth workspace refresh failed:', (err as Error).message);
+      setConnectionError(err);
+      if (isNetworkError(err)) scheduleRetry();
+    }
     broadcastState();
     mainWindow?.show();
     mainWindow?.focus();
@@ -395,12 +517,15 @@ app.whenReady().then(async () => {
   try {
     if (auth.isAuthenticated()) {
       await workspaces.refresh();
+      clearConnectionError();
       socket.connectAll(workspaces.getActiveWorkspaces());
       await queue.fetchPendingFromApi(workspaces.getActiveWorkspaces());
       console.log('[Main] Auto-reconnected.');
     }
   } catch (err) {
-    console.error('[Main] Auto-reconnect failed:', err);
+    console.error('[Main] Auto-reconnect failed:', (err as Error).message);
+    setConnectionError(err);
+    if (isNetworkError(err)) scheduleRetry();
   }
 
   broadcastState();

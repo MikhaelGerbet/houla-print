@@ -2,7 +2,7 @@
 
 export type PrintJobType = 'product_label' | 'order_summary' | 'invoice' | 'shipping_label' | 'packing_slip';
 export type PrintJobStatus = 'pending' | 'sent' | 'printed' | 'failed' | 'cancelled';
-export type PrintLabelFormat = 'zpl' | 'pdf' | 'escpos' | 'png';
+export type PrintLabelFormat = 'zpl' | 'pdf' | 'escpos' | 'png' | 'niimbot';
 export type PrintLabelSize = '57x32' | '40x30' | '50x25' | '100x50' | '100x100' | '100x150';
 
 export const LABEL_SIZE_OPTIONS: { value: PrintLabelSize; label: string }[] = [
@@ -69,7 +69,7 @@ export interface PrinterInfo {
   status: number;
   description: string;
   /** Inferred printer type based on name/driver */
-  type: 'thermal' | 'receipt' | 'standard' | 'unknown';
+  type: 'thermal' | 'receipt' | 'standard' | 'niimbot' | 'unknown';
 }
 
 export interface PrinterAssignments {
@@ -81,9 +81,12 @@ export interface PrinterAssignments {
   [key: string]: string | null;
 }
 
+export type ConnectionStatus = 'connected' | 'disconnected' | 'no-workspace' | 'error';
+
 export interface AppState {
   authenticated: boolean;
   connected: boolean;
+  connectionStatus: ConnectionStatus;
   workspaces: WorkspaceState[];
   printers: PrinterInfo[];
   printerAssignments: PrinterAssignments;

@@ -3,6 +3,7 @@ import { StoreService } from './store.service';
 import { ApiService } from './api.service';
 import { PrinterService } from './printer.service';
 import { PrintJob, WorkspaceState } from '../../shared/types';
+import { LabelContent } from './niimbot';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [2000, 5000, 15000]; // ms
@@ -132,9 +133,15 @@ export class QueueService {
   }
 
   /**
-   * Execute the actual print operation based on label format.
+   * Execute the actual print operation based on label format and printer type.
    */
   private async executePrint(job: PrintJob, printerName: string): Promise<void> {
+    // Check if printer is a Niimbot (serial) — route to Niimbot pipeline
+    if (printerName.startsWith('niimbot:') || this.isNiimbotPrinter(printerName)) {
+      await this.executeNiimbotPrint(job, printerName);
+      return;
+    }
+
     switch (job.labelFormat) {
       case 'zpl':
         if (!job.labelData) throw new Error('No label data for ZPL job');
@@ -167,6 +174,35 @@ export class QueueService {
       default:
         throw new Error(`Unsupported label format: ${job.labelFormat}`);
     }
+  }
+
+  /**
+   * Execute a print job targeting a Niimbot printer.
+   * Converts the job payload into a label bitmap and sends via NIIMBOT protocol.
+   */
+  private async executeNiimbotPrint(job: PrintJob, printerName: string): Promise<void> {
+    const content: LabelContent = {
+      productName: (job.payload.productName as string) || (job.payload.name as string) || 'Produit',
+      price: (job.payload.price as string) || undefined,
+      barcode: (job.payload.barcode as string) || (job.payload.sku as string) || undefined,
+      brandName: (job.payload.brandName as string) || undefined,
+      sku: (job.payload.sku as string) || undefined,
+      variant: (job.payload.variant as string) || undefined,
+    };
+
+    // Get label size from workspace config or the API config
+    const labelSize = '40x30'; // Default Niimbot B1 label size
+
+    await this.printer.printNiimbot(printerName, content, labelSize as any);
+  }
+
+  /**
+   * Check if a printer name corresponds to a detected Niimbot device.
+   */
+  private isNiimbotPrinter(printerName: string): boolean {
+    const detected = this.printer.getLastDetected();
+    const p = detected.find(d => d.name === printerName);
+    return p?.type === 'niimbot';
   }
 
   /**

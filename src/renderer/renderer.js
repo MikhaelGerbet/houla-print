@@ -45,6 +45,7 @@ const PRINTER_TYPE_ICONS = {
   thermal: '🏷️',
   receipt: '🧾',
   standard: '🖨️',
+  niimbot: '🔵',
   unknown: '❓',
 };
 
@@ -77,13 +78,19 @@ function updateUI(state) {
   }
 
   // Status bar
-  if (state.connected) {
+  const statusMap = {
+    'connected':    { dot: true,  text: 'Connecté' },
+    'no-workspace': { dot: false, text: 'Activez une boutique' },
+    'error':        { dot: false, text: 'Erreur connexion' },
+    'disconnected': { dot: false, text: 'Déconnecté' },
+  };
+  const status = statusMap[state.connectionStatus] || statusMap['disconnected'];
+  if (status.dot) {
     $statusDot.classList.add('connected');
-    $statusText.textContent = 'Connecté';
   } else {
     $statusDot.classList.remove('connected');
-    $statusText.textContent = 'Déconnecté';
   }
+  $statusText.textContent = status.text;
 
   $statPending.textContent = `${state.pendingJobsCount} en attente`;
   $statToday.textContent = `${state.printedTodayCount} imprimé(s)`;
@@ -117,20 +124,20 @@ function updateUI(state) {
 // ═══════════════════════════════════════════════════════
 
 function renderWorkspaces(workspaces) {
-  // Only show workspaces that have an active shop
-  const shopWorkspaces = (workspaces || []).filter(ws => ws.workspace.hasShop);
+  // Show all workspaces — user decides which to enable for printing
+  const allWorkspaces = workspaces || [];
 
-  if (shopWorkspaces.length === 0) {
+  if (allWorkspaces.length === 0) {
     $workspaceList.innerHTML = '<div class="empty-state">Aucune boutique trouvée</div>';
     return;
   }
 
-  $workspaceList.innerHTML = shopWorkspaces.map(ws => `
+  $workspaceList.innerHTML = allWorkspaces.map(ws => `
     <div class="card">
-      <div class="card-icon">🏪</div>
+      <div class="card-icon">${ws.workspace.hasShop ? '🏪' : '📁'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(ws.workspace.name)}</div>
-        <div class="card-subtitle">${ws.config?.enabled ? 'Impression activée' : 'Impression désactivée'}</div>
+        <div class="card-subtitle">${ws.workspace.hasShop ? (ws.config?.enabled ? 'Impression activée' : 'Impression désactivée') : 'Pas de boutique'}</div>
       </div>
       <div class="card-action">
         <label class="toggle">
@@ -160,12 +167,20 @@ function renderPrinters(printers) {
     return;
   }
 
+  const typeLabels = {
+    thermal: 'Thermique (ZPL)',
+    receipt: 'Ticket (ESC/POS)',
+    standard: 'Standard (PDF)',
+    niimbot: 'Niimbot (étiquettes)',
+    unknown: 'Inconnu',
+  };
+
   $printerList.innerHTML = printers.map(p => `
     <div class="card">
       <div class="card-icon">${PRINTER_TYPE_ICONS[p.type] || '🖨️'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(p.displayName)}</div>
-        <div class="card-subtitle">${p.type} ${p.isDefault ? '• par défaut' : ''}</div>
+        <div class="card-subtitle">${typeLabels[p.type] || p.type} ${p.isDefault ? '• par défaut' : ''}</div>
       </div>
       <div class="card-action">
         <button class="btn btn-sm btn-ghost" data-test-printer="${escapeAttr(p.name)}">Test</button>

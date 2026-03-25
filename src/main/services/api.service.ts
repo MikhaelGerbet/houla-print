@@ -20,7 +20,7 @@ export class ApiService {
   }
 
   async createApiKey(workspaceId: string): Promise<{ key: string; id: string }> {
-    return this.fetchWithAuth('POST', '/api/manager/api-keys', {
+    return this.fetchWithAuth('POST', '/api/keys', {
       name: 'Hou.la Print',
       workspaceId,
     });
