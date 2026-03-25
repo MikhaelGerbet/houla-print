@@ -23,7 +23,8 @@ export class ApiService {
     return this.fetchWithAuth('POST', '/api/keys', {
       name: 'Hou.la Print',
       workspaceId,
-    });
+      type: 'internal',
+    }, { 'X-Workspace-Id': workspaceId });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -109,12 +110,13 @@ export class ApiService {
   // Internal HTTP helpers
   // ═══════════════════════════════════════════════════════
 
-  private async fetchWithAuth(method: string, path: string, body?: unknown): Promise<any> {
+  private async fetchWithAuth(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<any> {
     const baseUrl = this.store.getApiUrl();
     let token = this.store.getAccessToken();
 
     let res = await this.doFetch(method, `${baseUrl}${path}`, {
       Authorization: `Bearer ${token}`,
+      ...extraHeaders,
     }, body);
 
     // Auto-refresh on 401
@@ -122,11 +124,13 @@ export class ApiService {
       token = await this.refreshAccessToken();
       res = await this.doFetch(method, `${baseUrl}${path}`, {
         Authorization: `Bearer ${token}`,
+        ...extraHeaders,
       }, body);
     }
 
     if (!res.ok) {
-      throw new Error(`API ${method} ${path} failed: ${res.status}`);
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`API ${method} ${path} failed: ${res.status} ${errBody}`);
     }
     return res.json();
   }

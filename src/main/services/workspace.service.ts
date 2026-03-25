@@ -73,6 +73,7 @@ export class WorkspaceService {
 
     // Create API key if enabling for the first time
     if (enabled && !state.apiKey) {
+      console.log(`[Workspaces] Creating API key for workspace: ${workspaceId}`);
       const result = await this.api.createApiKey(workspaceId);
       state.apiKey = result.key;
     }
