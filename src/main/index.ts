@@ -364,10 +364,25 @@ function registerIpcHandlers(): void {
     broadcastState();
   });
   ipcMain.handle(IPC.PRINTER_TEST, async (_e, printerName: string) => {
-    return printer.testPrint(printerName);
+    const result = await printer.testPrint(printerName);
+    // Save RFID-detected label format for this printer
+    if ((result as any).detectedLabel) {
+      const dl = (result as any).detectedLabel;
+      store.setPrinterLabelFormat(printerName, { widthMm: dl.widthMm, heightMm: dl.heightMm });
+      broadcastState();
+    }
+    return result;
   });
   ipcMain.handle(IPC.PRINTER_PROBE, async (_e, printerName: string) => {
     return printer.probePrinter(printerName);
+  });
+  ipcMain.handle(IPC.PRINTER_DETECT, async (_e, printerName: string) => {
+    const result = await printer.detectNiimbotLabel(printerName);
+    if (result.detectedLabel) {
+      store.setPrinterLabelFormat(printerName, { widthMm: result.detectedLabel.widthMm, heightMm: result.detectedLabel.heightMm });
+      broadcastState();
+    }
+    return result;
   });
   ipcMain.handle(IPC.PRINTER_PREVIEW, async (_e, labelSize: string) => {
     return printer.generatePreviewBase64(labelSize as any);
@@ -426,6 +441,7 @@ function getAppState(): AppState {
     env: store.getEnv(),
     apiUrl: store.getApiUrl(),
     appUrl: store.getAppUrl(),
+    printerLabelFormats: store.getAllPrinterLabelFormats(),
   };
 }
 

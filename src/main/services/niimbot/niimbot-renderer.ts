@@ -1,14 +1,13 @@
 /**
  * NIIMBOT label renderer — generates monochrome bitmaps from label data.
+ * V2: Enhanced content with order/customer info, QR codes, and adaptive layouts.
  *
  * Renders product labels into 1-bit packed bitmaps suitable for
  * NIIMBOT thermal printers (B1, B18, B21, etc.).
- *
- * Uses a built-in bitmap font for text and Code128 barcode generation.
- * No external image library required for basic labels.
  */
 
-import { PrintLabelSize, LABEL_SIZE_OPTIONS } from '../../../shared/types';
+import qrcode from 'qrcode-generator';
+import { PrintLabelSize } from '../../../shared/types';
 import { NiimbotModelSpec, DEFAULT_MODEL } from './niimbot-protocol';
 
 // ═══════════════════════════════════════════════════════
@@ -16,12 +15,29 @@ import { NiimbotModelSpec, DEFAULT_MODEL } from './niimbot-protocol';
 // ═══════════════════════════════════════════════════════
 
 export interface LabelContent {
+  // Product
   productName: string;
-  price?: string;          // e.g. "12,50 €"
-  barcode?: string;        // Value to encode as Code128
-  brandName?: string;
+  variant?: string;           // "Taille M / Rouge"
   sku?: string;
-  variant?: string;        // e.g. "Taille M / Bleu"
+  price?: string;             // "29.99€"
+  originalPrice?: string;     // "39.99€" (struck-through if different from price)
+  barcode?: string;           // Code128 barcode value
+
+  // Order
+  orderId?: string;           // "#37514"
+  orderDate?: string;         // "14/09/2025"
+  orderTotal?: string;        // "89.97€"
+  quantityFraction?: string;  // "1/3"
+
+  // Customer
+  customerName?: string;      // "Mercedes Villa"
+  socialHandle?: string;      // "@mercedes.tt"
+  country?: string;           // "France"
+
+  // QR & Brand
+  qrCodeUrl?: string;         // Short link with smart routing
+  brandName?: string;
+  websiteUrl?: string;        // "www.giamory.com"
 }
 
 export interface RenderedLabel {
@@ -46,10 +62,9 @@ export function renderProductLabel(
 
   const ctx = new BitmapCanvas(bitmap, w, h, bytesPerRow);
 
-  // Layout depends on label size
-  if (dims.isSmall) {
+  if (dims.heightMm <= 30) {
     renderSmallLabel(ctx, content, w, h);
-  } else if (dims.isLarge) {
+  } else if (dims.heightMm >= 80) {
     renderLargeLabel(ctx, content, w, h);
   } else {
     renderStandardLabel(ctx, content, w, h);
@@ -65,8 +80,8 @@ export function renderProductLabel(
 interface LabelDims {
   widthDots: number;
   heightDots: number;
-  isSmall: boolean;
-  isLarge: boolean;
+  widthMm: number;
+  heightMm: number;
 }
 
 function getLabelDimensions(size: PrintLabelSize, dpi: number): LabelDims {
@@ -75,8 +90,8 @@ function getLabelDimensions(size: PrintLabelSize, dpi: number): LabelDims {
   return {
     widthDots: Math.round(wMm * dotsPerMm),
     heightDots: Math.round(hMm * dotsPerMm),
-    isSmall: wMm <= 50 && hMm <= 30,
-    isLarge: wMm >= 100 && hMm >= 100,
+    widthMm: wMm,
+    heightMm: hMm,
   };
 }
 
@@ -146,6 +161,30 @@ class BitmapCanvas {
     return this.drawText(text, x, y + 1, scale);
   }
 
+  /** Draw right-aligned text, returns the x position where text starts */
+  drawTextRight(text: string, rightX: number, y: number, scale = 1): number {
+    const textWidth = text.length * 6 * scale;
+    const x = rightX - textWidth;
+    this.drawText(text, x, y, scale);
+    return x;
+  }
+
+  /** Draw right-aligned bold text */
+  drawTextBoldRight(text: string, rightX: number, y: number, scale = 1): number {
+    const textWidth = text.length * 6 * scale;
+    const x = rightX - textWidth;
+    this.drawTextBold(text, x, y, scale);
+    return x;
+  }
+
+  /** Draw text with a strikethrough line */
+  drawTextStrikethrough(text: string, x: number, y: number, scale = 1): number {
+    const w = this.drawText(text, x, y, scale);
+    const midY = y + Math.floor(7 * scale / 2);
+    this.hLine(x, midY, w, scale);
+    return w;
+  }
+
   /** Draw a Code128B barcode */
   drawBarcode(value: string, x: number, y: number, barHeight: number, moduleWidth = 2): number {
     const encoded = encodeCode128B(value);
@@ -158,162 +197,383 @@ class BitmapCanvas {
     }
     return cx - x;
   }
+
+  /** Draw a QR code at position (x, y) with given module size in dots. Returns size in dots. */
+  drawQrCode(url: string, x: number, y: number, moduleSize: number): number {
+    const qr = qrcode(0, 'L');
+    qr.addData(url);
+    qr.make();
+    const count = qr.getModuleCount();
+    const size = count * moduleSize;
+    // Draw quiet zone (2-module white border is implicit since bitmap is white)
+    for (let row = 0; row < count; row++) {
+      for (let col = 0; col < count; col++) {
+        if (qr.isDark(row, col)) {
+          this.fillRect(
+            x + col * moduleSize,
+            y + row * moduleSize,
+            moduleSize,
+            moduleSize,
+          );
+        }
+      }
+    }
+    return size;
+  }
+
+  /** Compute QR code size without drawing it */
+  static qrCodeSize(url: string, moduleSize: number): number {
+    const qr = qrcode(0, 'L');
+    qr.addData(url);
+    qr.make();
+    return qr.getModuleCount() * moduleSize;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
 // Label layouts
 // ═══════════════════════════════════════════════════════
 
-/** Small labels: 40×30, 50×25 — product name + price only */
-function renderSmallLabel(ctx: BitmapCanvas, content: LabelContent, w: number, h: number): void {
-  const margin = 8;
+/**
+ * Small labels (h ≤ 30mm): compact layout with QR code on right.
+ * Optimized to fill available space: header row, product info, bottom price bar.
+ */
+function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: number): void {
+  const m = 4; // tight margin for small labels
+  const fullW = w - m * 2;
 
-  // Product name (truncate if too long)
-  const maxChars = Math.floor((w - margin * 2) / 12); // scale=2, 6px per char
-  const name = truncate(content.productName, maxChars);
-  ctx.drawTextBold(name, margin, margin, 2);
-
-  // Variant line
-  let yOffset = margin + 18;
-  if (content.variant) {
-    const variantText = truncate(content.variant, maxChars);
-    ctx.drawText(variantText, margin, yOffset, 1);
-    yOffset += 10;
+  // QR code on the right (small module for compact labels)
+  let qrSize = 0;
+  let textW = fullW;
+  if (c.qrCodeUrl && w >= 200) {
+    const modSize = 2;
+    qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, modSize);
+    // Place QR vertically centered on the right
+    const qrX = w - m - qrSize;
+    const qrY = Math.max(m, Math.floor((h - qrSize) / 2));
+    ctx.drawQrCode(c.qrCodeUrl, qrX, qrY, modSize);
+    textW = qrX - m - 4; // leave small gap
   }
 
-  // Price (large)
-  if (content.price) {
-    ctx.drawTextBold(content.price, margin, h - margin - 16, 2);
+  const maxChars2 = Math.floor(textW / 12);
+  const maxChars1 = Math.floor(textW / 6);
+  let y = m;
+
+  // Row 1: Order info (orderId + date) — scale 1, bold
+  if (c.orderId) {
+    let orderStr = c.orderId;
+    if (c.orderDate) orderStr += '  ' + c.orderDate;
+    ctx.drawTextBold(truncate(orderStr, maxChars1), m, y, 1);
+    y += 10;
+  }
+
+  // Product name (bold, scale 2)
+  ctx.drawTextBold(truncate(c.productName, maxChars2), m, y, 2);
+  y += 16;
+
+  // Variant (scale 1)
+  if (c.variant) {
+    ctx.drawText(truncate(c.variant, maxChars1), m, y, 1);
+    y += 9;
+  }
+
+  // SKU (scale 1)
+  if (c.sku) {
+    ctx.drawText(truncate('REF: ' + c.sku, maxChars1), m, y, 1);
+    y += 9;
+  }
+
+  // Separator
+  ctx.hLine(m, y, textW, 1);
+  y += 3;
+
+  // Customer line
+  if (c.customerName) {
+    let custLine = c.customerName;
+    if (c.socialHandle) custLine = c.socialHandle + ' ' + custLine;
+    ctx.drawText(truncate(custLine, maxChars1), m, y, 1);
+    y += 9;
+  } else if (c.socialHandle) {
+    ctx.drawText(truncate(c.socialHandle, maxChars1), m, y, 1);
+    y += 9;
+  }
+
+  // Bottom bar: price (right, scale 2 bold) + quantity (left, scale 1)
+  const bottomY = h - m - 14;
+  if (c.price) {
+    if (c.originalPrice && c.originalPrice !== c.price) {
+      ctx.drawTextStrikethrough(c.originalPrice, m, bottomY + 4, 1);
+      const origW = c.originalPrice.length * 6 + 4;
+      ctx.drawTextBoldRight(c.price, m + textW, bottomY, 2);
+    } else {
+      ctx.drawTextBoldRight(c.price, m + textW, bottomY, 2);
+    }
+  }
+  if (c.quantityFraction) {
+    ctx.drawText(c.quantityFraction, m, bottomY + 4, 1);
   }
 }
 
-/** Standard labels: 57×32, 100×50 — name, variant, price, barcode */
-function renderStandardLabel(ctx: BitmapCanvas, content: LabelContent, w: number, h: number): void {
-  const margin = 10;
-  let y = margin;
+/**
+ * Standard labels (30 < h < 80mm): full info with optional QR code.
+ * Two-column layout when QR is available.
+ */
+function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: number): void {
+  const m = 8;
 
-  // Brand name (small)
-  if (content.brandName) {
-    ctx.drawText(content.brandName.toUpperCase(), margin, y, 1);
-    y += 12;
+  // QR column on the right if URL provided
+  const qrModuleSize = 3;
+  let qrSize = 0;
+  let textW = w - m * 2;
+
+  if (c.qrCodeUrl && w >= 280) {
+    qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, qrModuleSize);
+    const qrColW = qrSize + 8; // 8px gap
+    textW = w - m - qrColW - 4;
+    const qrX = w - m - qrSize;
+    ctx.drawQrCode(c.qrCodeUrl, qrX, m, qrModuleSize);
   }
 
-  // Separator line
-  ctx.hLine(margin, y, w - margin * 2, 1);
+  const maxChars2 = Math.floor(textW / 12);
+  const maxChars1 = Math.floor(textW / 6);
+  let y = m;
+
+  // Header line: brand + order info
+  if (c.brandName) {
+    ctx.drawText(c.brandName.toUpperCase(), m, y, 1);
+  }
+  if (c.orderId) {
+    const orderInfo = c.orderId + (c.orderDate ? '  ' + c.orderDate : '');
+    const infoW = orderInfo.length * 6;
+    const infoX = Math.min(m + textW - infoW, w - m - infoW);
+    if (infoX > m + (c.brandName?.length || 0) * 6 + 6) {
+      ctx.drawText(orderInfo, infoX, y, 1);
+    }
+  }
+  y += 12;
+
+  // Separator
+  ctx.hLine(m, y, textW, 1);
   y += 4;
 
   // Product name (bold, scale 2)
-  const maxChars = Math.floor((w - margin * 2) / 12);
-  const name = truncate(content.productName, maxChars);
-  ctx.drawTextBold(name, margin, y, 2);
-  y += 20;
+  const name1 = truncate(c.productName, maxChars2);
+  ctx.drawTextBold(name1, m, y, 2);
+  y += 18;
 
   // Second line for long names
-  if (content.productName.length > maxChars) {
-    const secondLine = truncate(content.productName.substring(maxChars), maxChars);
-    ctx.drawText(secondLine, margin, y, 2);
-    y += 18;
+  if (c.productName.length > maxChars2) {
+    const name2 = truncate(c.productName.substring(maxChars2), maxChars2);
+    ctx.drawText(name2, m, y, 2);
+    y += 16;
   }
 
   // Variant
-  if (content.variant) {
-    ctx.drawText(content.variant, margin, y, 1);
-    y += 12;
+  if (c.variant) {
+    ctx.drawText(truncate(c.variant, maxChars1), m, y, 1);
+    y += 10;
   }
 
   // SKU
-  if (content.sku) {
-    ctx.drawText(`REF: ${content.sku}`, margin, y, 1);
-    y += 12;
+  if (c.sku) {
+    ctx.drawText(truncate('REF: ' + c.sku, maxChars1), m, y, 1);
+    y += 10;
   }
 
-  // Bottom section: price + barcode
-  const bottomY = h - margin;
+  // Separator before customer section
+  y += 2;
+  ctx.hLine(m, y, textW, 1);
+  y += 4;
 
-  // Price (large, bottom-left)
-  if (content.price) {
-    ctx.drawTextBold(content.price, margin, bottomY - 16, 2);
+  // Customer info
+  if (c.socialHandle) {
+    ctx.drawTextBold(truncate(c.socialHandle, maxChars1), m, y, 1);
+    const handleW = c.socialHandle.length * 6 + 6;
+    if (c.customerName && handleW + c.customerName.length * 6 < textW) {
+      ctx.drawText(c.customerName, m + handleW, y, 1);
+    }
+    y += 10;
+    if (c.customerName && handleW + (c.customerName?.length || 0) * 6 >= textW) {
+      ctx.drawText(truncate(c.customerName, maxChars1), m, y, 1);
+      y += 10;
+    }
+  } else if (c.customerName) {
+    ctx.drawTextBold(truncate(c.customerName, maxChars1), m, y, 1);
+    y += 10;
   }
 
-  // Barcode (bottom-right, if space)
-  if (content.barcode && w > 250) {
-    const barcodeWidth = content.barcode.length * 11 * 2; // rough estimate
-    const barcodeX = w - margin - barcodeWidth;
-    const barcodeY = bottomY - 40;
-    if (barcodeX > w / 2) {
-      ctx.drawBarcode(content.barcode, barcodeX, barcodeY, 30, 1);
-      ctx.drawText(content.barcode, barcodeX, barcodeY + 32, 1);
+  if (c.country) {
+    ctx.drawText(c.country, m, y, 1);
+    y += 10;
+  }
+
+  // Bottom section: price
+  const bottomY = h - m;
+
+  // Price line (bold, scale 2, bottom-right of text area)
+  if (c.price) {
+    const priceY = bottomY - 16;
+    // Strikethrough original price if different
+    if (c.originalPrice && c.originalPrice !== c.price) {
+      ctx.drawTextStrikethrough(c.originalPrice, m, priceY + 2, 1);
+      const origW = c.originalPrice.length * 6 + 8;
+      ctx.drawTextBold(c.price, m + origW, priceY, 2);
+    } else {
+      ctx.drawTextBold(c.price, m, priceY, 2);
+    }
+
+    // Quantity fraction next to price
+    if (c.quantityFraction) {
+      ctx.drawTextRight(c.quantityFraction, m + textW, priceY + 4, 1);
     }
   }
 }
 
-/** Large labels: 100×100, 100×150 — full layout with barcode */
-function renderLargeLabel(ctx: BitmapCanvas, content: LabelContent, w: number, h: number): void {
-  const margin = 16;
-  let y = margin;
+/**
+ * Large labels (h ≥ 80mm): full layout with large QR code, barcode, website.
+ * Two-column layout with QR on the upper-right.
+ */
+function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: number): void {
+  const m = 12;
 
-  // Brand name header
-  if (content.brandName) {
-    ctx.drawTextBold(content.brandName.toUpperCase(), margin, y, 2);
-    y += 24;
-    ctx.hLine(margin, y, w - margin * 2, 2);
-    y += 8;
+  // QR column on right
+  const qrModuleSize = 4;
+  let qrSize = 0;
+  let textW = w - m * 2;
+
+  if (c.qrCodeUrl) {
+    qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, qrModuleSize);
+    const qrColW = qrSize + 10;
+    textW = w - m - qrColW - 4;
+    const qrX = w - m - qrSize;
+    ctx.drawQrCode(c.qrCodeUrl, qrX, m, qrModuleSize);
   }
 
-  // Product name (large, bold)
-  const maxChars3 = Math.floor((w - margin * 2) / 18); // scale=3
-  const name = truncate(content.productName, maxChars3);
-  ctx.drawTextBold(name, margin, y, 3);
-  y += 28;
+  const maxChars2 = Math.floor(textW / 12);
+  const maxChars3 = Math.floor(textW / 18);
+  const maxChars1 = Math.floor(textW / 6);
+  let y = m;
 
-  // Wrap to second line if needed
-  if (content.productName.length > maxChars3) {
-    const line2 = truncate(content.productName.substring(maxChars3), maxChars3);
-    ctx.drawText(line2, margin, y, 3);
-    y += 28;
-  }
-
-  y += 8;
-
-  // Variant
-  if (content.variant) {
-    ctx.drawText(content.variant, margin, y, 2);
+  // Brand name (bold, scale 2)
+  if (c.brandName) {
+    ctx.drawTextBold(c.brandName.toUpperCase(), m, y, 2);
     y += 22;
+    ctx.hLine(m, y, textW, 2);
+    y += 6;
+  }
+
+  // Order info
+  if (c.orderId) {
+    let orderLine = c.orderId;
+    if (c.orderDate) orderLine += '   ' + c.orderDate;
+    ctx.drawText(truncate(orderLine, maxChars1), m, y, 1);
+    y += 12;
+  }
+
+  // Separator
+  ctx.hLine(m, y, textW, 1);
+  y += 6;
+
+  // Product name (bold, scale 3)
+  const name1 = truncate(c.productName, maxChars3);
+  ctx.drawTextBold(name1, m, y, 3);
+  y += 26;
+
+  if (c.productName.length > maxChars3) {
+    const name2 = truncate(c.productName.substring(maxChars3), maxChars3);
+    ctx.drawText(name2, m, y, 3);
+    y += 24;
+  }
+
+  y += 4;
+
+  // Variant (scale 2)
+  if (c.variant) {
+    ctx.drawText(truncate(c.variant, maxChars2), m, y, 2);
+    y += 18;
   }
 
   // SKU
-  if (content.sku) {
-    ctx.drawText(`REF: ${content.sku}`, margin, y, 1);
-    y += 14;
+  if (c.sku) {
+    ctx.drawText(truncate('REF: ' + c.sku, maxChars1), m, y, 1);
+    y += 12;
   }
 
-  // Price section (centered, very large)
-  if (content.price) {
+  // Separator
+  ctx.hLine(m, y, textW, 1);
+  y += 6;
+
+  // Customer section
+  if (c.socialHandle) {
+    ctx.drawTextBold(truncate(c.socialHandle, maxChars2), m, y, 2);
+    y += 18;
+  }
+  if (c.customerName) {
+    ctx.drawText(truncate(c.customerName, maxChars1), m, y, 1);
+    y += 12;
+  }
+  if (c.country) {
+    ctx.drawText(c.country, m, y, 1);
+    y += 12;
+  }
+
+  // Quantity fraction
+  if (c.quantityFraction) {
+    y += 2;
+    ctx.drawText(c.quantityFraction, m, y, 1);
+    y += 12;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Bottom section (full width) — price, barcode, website
+  // ═══════════════════════════════════════════════════════
+
+  const fullW = w - m * 2;
+
+  // Price section (centered, large)
+  if (c.price) {
+    y += 4;
+    ctx.hLine(m, y, fullW, 1);
     y += 8;
-    ctx.hLine(margin, y, w - margin * 2, 1);
-    y += 8;
-    const priceScale = 4;
-    const priceWidth = content.price.length * 6 * priceScale;
+
+    if (c.originalPrice && c.originalPrice !== c.price) {
+      // Strikethrough original price centered
+      const origW = c.originalPrice.length * 6;
+      const origX = Math.floor((w - origW) / 2);
+      ctx.drawTextStrikethrough(c.originalPrice, origX, y, 1);
+      y += 12;
+    }
+
+    // Main price (bold, scale 4, centered)
+    const priceScale = h > 600 ? 4 : 3;
+    const priceWidth = c.price.length * 6 * priceScale;
     const priceX = Math.floor((w - priceWidth) / 2);
-    ctx.drawTextBold(content.price, priceX, y, priceScale);
+    ctx.drawTextBold(c.price, priceX, y, priceScale);
     y += 7 * priceScale + 8;
   }
 
   // Barcode at bottom
-  if (content.barcode) {
-    y = Math.max(y + 8, h - margin - 60);
-    ctx.hLine(margin, y, w - margin * 2, 1);
+  if (c.barcode && y + 60 < h) {
+    ctx.hLine(m, y, fullW, 1);
     y += 6;
     const moduleW = 2;
-    const barcodePixels = encodeCode128B(content.barcode);
+    const barcodePixels = encodeCode128B(c.barcode);
     const barcodeWidth = barcodePixels.length * moduleW;
     const barcodeX = Math.floor((w - barcodeWidth) / 2);
-    ctx.drawBarcode(content.barcode, barcodeX, y, 40, moduleW);
-    y += 44;
-    // Barcode text centered below
-    const textWidth = content.barcode.length * 6;
+    ctx.drawBarcode(c.barcode, barcodeX, y, 36, moduleW);
+    y += 40;
+    const textWidth = c.barcode.length * 6;
     const textX = Math.floor((w - textWidth) / 2);
-    ctx.drawText(content.barcode, textX, y, 1);
+    ctx.drawText(c.barcode, textX, y, 1);
+    y += 12;
+  }
+
+  // Website URL (very bottom, centered)
+  if (c.websiteUrl) {
+    const urlY = h - m - 8;
+    const urlW = c.websiteUrl.length * 6;
+    const urlX = Math.floor((w - urlW) / 2);
+    ctx.drawText(c.websiteUrl, urlX, urlY, 1);
   }
 }
 
@@ -423,7 +683,12 @@ const FONT_5X7: Record<number, number[]> = {
   0x38: [0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e],
   0x39: [0x0e,0x11,0x11,0x0f,0x01,0x02,0x0c],
   0x3a: [0x00,0x00,0x04,0x00,0x04,0x00,0x00],
+  0x3b: [0x00,0x00,0x04,0x00,0x04,0x04,0x08],
+  0x3c: [0x00,0x02,0x04,0x08,0x04,0x02,0x00],
+  0x3d: [0x00,0x00,0x1f,0x00,0x1f,0x00,0x00],
+  0x3e: [0x00,0x08,0x04,0x02,0x04,0x08,0x00],
   0x3f: [0x0e,0x11,0x01,0x02,0x04,0x00,0x04],
+  0x40: [0x0e,0x11,0x17,0x15,0x17,0x10,0x0e],
   0x41: [0x0e,0x11,0x11,0x1f,0x11,0x11,0x11],
   0x42: [0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e],
   0x43: [0x0e,0x11,0x10,0x10,0x10,0x11,0x0e],
@@ -476,8 +741,81 @@ const FONT_5X7: Record<number, number[]> = {
   0x78: [0x00,0x00,0x11,0x0a,0x04,0x0a,0x11],
   0x79: [0x00,0x00,0x11,0x11,0x0f,0x01,0x0e],
   0x7a: [0x00,0x00,0x1f,0x02,0x04,0x08,0x1f],
+  0x5b: [0x0e,0x08,0x08,0x08,0x08,0x08,0x0e],
+  0x5c: [0x10,0x08,0x04,0x04,0x02,0x01,0x00],
+  0x5d: [0x0e,0x02,0x02,0x02,0x02,0x02,0x0e],
+  0x5e: [0x04,0x0a,0x11,0x00,0x00,0x00,0x00],
+  0x5f: [0x00,0x00,0x00,0x00,0x00,0x00,0x1f],
+  0x26: [0x08,0x14,0x08,0x15,0x12,0x12,0x0d],
+  0x2a: [0x04,0x15,0x0e,0x1f,0x0e,0x15,0x04],
+  0x7b: [0x02,0x04,0x04,0x08,0x04,0x04,0x02],
+  0x7c: [0x04,0x04,0x04,0x04,0x04,0x04,0x04],
+  0x7d: [0x08,0x04,0x04,0x02,0x04,0x04,0x08],
+  0x7e: [0x00,0x00,0x08,0x15,0x02,0x00,0x00],
   // Euro sign (€ = 0x20AC, mapped to a custom slot)
   0x80: [0x06,0x09,0x1e,0x08,0x1e,0x09,0x06],
+
+  // ═══════════════════════════════════════════════════════
+  // French accented characters (Unicode code points)
+  // ═══════════════════════════════════════════════════════
+
+  // Lowercase accented — accent on row 0, base letter rows 1-6
+  // à (0xE0) — grave accent + a
+  0xe0: [0x08,0x04,0x0e,0x01,0x0f,0x11,0x0f],
+  // â (0xE2) — circumflex + a
+  0xe2: [0x04,0x0a,0x0e,0x01,0x0f,0x11,0x0f],
+  // ä (0xE4) — dieresis + a
+  0xe4: [0x0a,0x00,0x0e,0x01,0x0f,0x11,0x0f],
+  // è (0xE8) — grave + e
+  0xe8: [0x08,0x04,0x0e,0x11,0x1f,0x10,0x0e],
+  // é (0xE9) — acute + e
+  0xe9: [0x02,0x04,0x0e,0x11,0x1f,0x10,0x0e],
+  // ê (0xEA) — circumflex + e
+  0xea: [0x04,0x0a,0x0e,0x11,0x1f,0x10,0x0e],
+  // ë (0xEB) — dieresis + e
+  0xeb: [0x0a,0x00,0x0e,0x11,0x1f,0x10,0x0e],
+  // î (0xEE) — circumflex + i
+  0xee: [0x04,0x0a,0x0c,0x04,0x04,0x04,0x0e],
+  // ï (0xEF) — dieresis + i
+  0xef: [0x0a,0x00,0x0c,0x04,0x04,0x04,0x0e],
+  // ô (0xF4) — circumflex + o
+  0xf4: [0x04,0x0a,0x0e,0x11,0x11,0x11,0x0e],
+  // ù (0xF9) — grave + u
+  0xf9: [0x08,0x04,0x11,0x11,0x11,0x13,0x0d],
+  // û (0xFB) — circumflex + u
+  0xfb: [0x04,0x0a,0x11,0x11,0x11,0x13,0x0d],
+  // ü (0xFC) — dieresis + u
+  0xfc: [0x0a,0x00,0x11,0x11,0x11,0x13,0x0d],
+  // ç (0xE7) — c with cedilla
+  0xe7: [0x00,0x00,0x0e,0x10,0x10,0x0e,0x04],
+
+  // Uppercase accented — compressed: accent row 0, letter rows 1-6
+  // À (0xC0)
+  0xc0: [0x08,0x04,0x0e,0x11,0x1f,0x11,0x11],
+  // Â (0xC2)
+  0xc2: [0x04,0x0a,0x0e,0x11,0x1f,0x11,0x11],
+  // È (0xC8)
+  0xc8: [0x08,0x04,0x1f,0x10,0x1e,0x10,0x1f],
+  // É (0xC9)
+  0xc9: [0x02,0x04,0x1f,0x10,0x1e,0x10,0x1f],
+  // Ê (0xCA)
+  0xca: [0x04,0x0a,0x1f,0x10,0x1e,0x10,0x1f],
+  // Ë (0xCB)
+  0xcb: [0x0a,0x00,0x1f,0x10,0x1e,0x10,0x1f],
+  // Î (0xCE)
+  0xce: [0x04,0x0a,0x0e,0x04,0x04,0x04,0x0e],
+  // Ï (0xCF)
+  0xcf: [0x0a,0x00,0x0e,0x04,0x04,0x04,0x0e],
+  // Ô (0xD4)
+  0xd4: [0x04,0x0a,0x0e,0x11,0x11,0x11,0x0e],
+  // Ù (0xD9)
+  0xd9: [0x08,0x04,0x11,0x11,0x11,0x11,0x0e],
+  // Û (0xDB)
+  0xdb: [0x04,0x0a,0x11,0x11,0x11,0x11,0x0e],
+  // Ü (0xDC)
+  0xdc: [0x0a,0x00,0x11,0x11,0x11,0x11,0x0e],
+  // Ç (0xC7)
+  0xc7: [0x0e,0x11,0x10,0x10,0x11,0x0e,0x04],
 };
 
 // Map € to our custom slot

@@ -183,20 +183,31 @@ function renderPrinters(printers) {
     unknown: 'Inconnu',
   };
 
-  $printerList.innerHTML = printers.map(p => `
+  const formats = currentState?.printerLabelFormats || {};
+
+  $printerList.innerHTML = printers.map(p => {
+    const fmt = formats[p.name];
+    const fmtBadge = fmt
+      ? `<span class="badge badge-detected">${fmt.widthMm}×${fmt.heightMm}mm</span>`
+      : '';
+    const detectBtn = p.type === 'niimbot'
+      ? `<button class="btn btn-sm btn-ghost btn-detect" data-detect-printer="${escapeAttr(p.name)}"><span class="btn-detect-label">Détecter</span></button>`
+      : '';
+    return `
     <div class="card">
       <div class="card-icon">${PRINTER_TYPE_ICONS[p.type] || '🖨️'}</div>
       <div class="card-body">
-        <div class="card-title">${escapeHtml(p.displayName)}</div>
+        <div class="card-title">${escapeHtml(p.displayName)} ${fmtBadge}</div>
         <div class="card-subtitle">${typeLabels[p.type] || p.type}${p.description ? ' • ' + escapeHtml(p.description) : ''} ${p.isDefault ? '• par défaut' : ''}</div>
       </div>
       <div class="card-action">
+        ${detectBtn}
         <button class="btn btn-sm btn-ghost btn-test" data-test-printer="${escapeAttr(p.name)}">
           <span class="btn-test-label">Test</span>
         </button>
       </div>
     </div>
-  `).join('');
+  `}).join('');
 
   // Bind test buttons
   $printerList.querySelectorAll('[data-test-printer]').forEach(el => {
@@ -244,6 +255,45 @@ function renderPrinters(printers) {
       }, 4000);
     });
   });
+
+  // Bind detect buttons (Niimbot only — RFID detection without printing)
+  $printerList.querySelectorAll('[data-detect-printer]').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const name = btn.dataset.detectPrinter;
+      const labelSpan = btn.querySelector('.btn-detect-label');
+
+      btn.disabled = true;
+      btn.classList.add('btn-test-loading');
+      if (labelSpan) labelSpan.textContent = 'Détection…';
+
+      try {
+        const result = await api.detectLabel(name);
+        btn.classList.remove('btn-test-loading');
+
+        if (result.success && result.detectedLabel) {
+          btn.classList.add('btn-test-success');
+          const dl = result.detectedLabel;
+          if (labelSpan) labelSpan.textContent = '✓ ' + dl.widthMm + '×' + dl.heightMm + 'mm';
+          const sizeStr = dl.widthMm + 'x' + dl.heightMm;
+          updateDetectedLabelSize(sizeStr, dl);
+        } else {
+          btn.classList.add('btn-test-error');
+          if (labelSpan) labelSpan.textContent = '✕ ' + (result.error || 'Non détecté');
+        }
+      } catch (err) {
+        btn.classList.remove('btn-test-loading');
+        btn.classList.add('btn-test-error');
+        if (labelSpan) labelSpan.textContent = '✕ ' + (err.message || 'Erreur');
+      }
+
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('btn-test-success', 'btn-test-error');
+        if (labelSpan) labelSpan.textContent = 'Détecter';
+      }, 4000);
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -276,6 +326,15 @@ function renderAssignments(assignments, printers) {
 
     el.addEventListener('change', (e) => {
       api.assignPrinter(type, e.target.value || null);
+      // When product_label assignment changes, update preview with that printer's format
+      if (type === 'product_label' && currentState) {
+        const printerName = e.target.value;
+        const formats = currentState.printerLabelFormats || {};
+        const fmt = printerName ? formats[printerName] : null;
+        if (fmt) {
+          loadLabelPreview(fmt.widthMm + 'x' + fmt.heightMm);
+        }
+      }
     });
   });
 }
@@ -290,17 +349,30 @@ function renderAssignments(assignments, printers) {
 
 function renderLabelSizes(workspaces) {
   const shopWorkspaces = (workspaces || []).filter(ws => ws.workspace.hasShop && ws.enabled);
+  const formats = currentState?.printerLabelFormats || {};
+  const assignments = currentState?.printerAssignments || {};
+
+  // Show detected format for the assigned product_label printer
+  const assignedPrinter = assignments.product_label;
+  const detectedFmt = assignedPrinter ? formats[assignedPrinter] : null;
 
   if (shopWorkspaces.length === 0) {
     $labelSizeList.innerHTML = '<div class="empty-state">Activez une boutique pour configurer le format</div>';
     return;
   }
 
+  // Detected format info
+  const detectedInfo = detectedFmt
+    ? `<div class="detected-format-info">
+        <span class="badge badge-detected">📡 Format détecté : ${detectedFmt.widthMm} × ${detectedFmt.heightMm} mm</span>
+      </div>`
+    : '';
+
   const sizeOptions = LABEL_SIZE_OPTIONS
     .map(o => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`)
     .join('');
 
-  $labelSizeList.innerHTML = shopWorkspaces.map(ws => {
+  $labelSizeList.innerHTML = detectedInfo + shopWorkspaces.map(ws => {
     const currentSize = ws.config?.productLabelSize || '57x32';
     return `
       <div class="assignment-item">
@@ -316,7 +388,22 @@ function renderLabelSizes(workspaces) {
   $labelSizeList.querySelectorAll('select').forEach(el => {
     const wsId = el.dataset.wsLabelSize;
     const ws = shopWorkspaces.find(w => w.workspace.id === wsId);
-    el.value = ws?.config?.productLabelSize || '57x32';
+
+    // If printer has a detected format, use it; otherwise use saved config
+    if (detectedFmt) {
+      const detectedSize = detectedFmt.widthMm + 'x' + detectedFmt.heightMm;
+      // Add detected option if not in the list
+      const existing = Array.from(el.options).find(o => o.value === detectedSize);
+      if (!existing) {
+        const opt = document.createElement('option');
+        opt.value = detectedSize;
+        opt.textContent = detectedFmt.widthMm + ' × ' + detectedFmt.heightMm + ' mm — Détecté (RFID)';
+        el.appendChild(opt);
+      }
+      el.value = detectedSize;
+    } else {
+      el.value = ws?.config?.productLabelSize || '57x32';
+    }
 
     el.addEventListener('change', (e) => {
       api.updateWorkspaceConfig(wsId, { productLabelSize: e.target.value });
@@ -324,9 +411,11 @@ function renderLabelSizes(workspaces) {
     });
   });
 
-  // Load initial preview with the first workspace's label size
-  const firstSize = shopWorkspaces[0]?.config?.productLabelSize || '57x32';
-  loadLabelPreview(firstSize);
+  // Load preview with detected format or first workspace's config
+  const previewSize = detectedFmt
+    ? detectedFmt.widthMm + 'x' + detectedFmt.heightMm
+    : shopWorkspaces[0]?.config?.productLabelSize || '57x32';
+  loadLabelPreview(previewSize);
 }
 
 /**

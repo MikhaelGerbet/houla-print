@@ -120,6 +120,22 @@ body {
   display: none;
 }
 
+.badge-detected {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--primary, #667eea);
+  color: #fff;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.detected-format-info {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+}
+
 /* ═══════════════════════════════════════════════════════
    Main App Area
    ═══════════════════════════════════════════════════════ */
@@ -633,6 +649,14 @@ body {
 .btn-test {
   min-width: 56px;
   transition: background 0.2s, color 0.2s;
+}
+
+.btn-detect {
+  min-width: 72px;
+  transition: background 0.2s, color 0.2s;
+  margin-right: 4px;
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .btn-test:disabled {

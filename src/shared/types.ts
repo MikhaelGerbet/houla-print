@@ -3,11 +3,12 @@
 export type PrintJobType = 'product_label' | 'order_summary' | 'invoice' | 'shipping_label' | 'packing_slip';
 export type PrintJobStatus = 'pending' | 'sent' | 'printed' | 'failed' | 'cancelled';
 export type PrintLabelFormat = 'zpl' | 'pdf' | 'escpos' | 'png' | 'niimbot';
-export type PrintLabelSize = '57x32' | '40x30' | '50x25' | '100x50' | '100x100' | '100x150';
+export type PrintLabelSize = '57x32' | '40x30' | '50x30' | '50x25' | '100x50' | '100x100' | '100x150';
 
 export const LABEL_SIZE_OPTIONS: { value: PrintLabelSize; label: string }[] = [
   { value: '57x32',   label: '57 × 32 mm — Standard' },
   { value: '40x30',   label: '40 × 30 mm — Petit (bijoux)' },
+  { value: '50x30',   label: '50 × 30 mm — Niimbot standard' },
   { value: '50x25',   label: '50 × 25 mm — Compact' },
   { value: '100x50',  label: '100 × 50 mm — Moyen' },
   { value: '100x100', label: '100 × 100 mm — Grand carré' },
@@ -90,6 +91,7 @@ export interface AppState {
   workspaces: WorkspaceState[];
   printers: PrinterInfo[];
   printerAssignments: PrinterAssignments;
+  printerLabelFormats: Record<string, { widthMm: number; heightMm: number }>;
   pendingJobsCount: number;
   printedTodayCount: number;
   lastError: string | null;
@@ -119,6 +121,7 @@ export const IPC = {
   PRINTER_ASSIGN: 'printer:assign',
   PRINTER_TEST: 'printer:test',
   PRINTER_PROBE: 'printer:probe',
+  PRINTER_DETECT: 'printer:detect',
   PRINTER_PREVIEW: 'printer:preview',
 
   // Print queue

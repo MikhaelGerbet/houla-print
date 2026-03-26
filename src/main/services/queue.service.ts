@@ -8,6 +8,14 @@ import { LabelContent } from './niimbot';
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [2000, 5000, 15000]; // ms
 
+/** Build "1/3" from quantityIndex and quantity fields */
+function buildQuantityFraction(idx: unknown, total: unknown): string | undefined {
+  const i = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
+  const t = typeof total === 'number' ? total : parseInt(total as string, 10);
+  if (isNaN(i) || isNaN(t) || t <= 1) return undefined;
+  return `${i}/${t}`;
+}
+
 /**
  * Local print queue: receives jobs from WebSocket or API polling,
  * routes them to the correct printer, handles retries, and acks the API.
@@ -181,17 +189,47 @@ export class QueueService {
    * Converts the job payload into a label bitmap and sends via NIIMBOT protocol.
    */
   private async executeNiimbotPrint(job: PrintJob, printerName: string): Promise<void> {
-    const content: LabelContent = {
-      productName: (job.payload.productName as string) || (job.payload.name as string) || 'Produit',
-      price: (job.payload.price as string) || undefined,
-      barcode: (job.payload.barcode as string) || (job.payload.sku as string) || undefined,
-      brandName: (job.payload.brandName as string) || undefined,
-      sku: (job.payload.sku as string) || undefined,
-      variant: (job.payload.variant as string) || undefined,
+    const p = job.payload;
+
+    // Format price from cents if only priceCents is provided
+    const formatPrice = (cents: unknown, currency: unknown): string | undefined => {
+      if (typeof cents !== 'number') return undefined;
+      const cur = (currency as string) || 'EUR';
+      const val = (cents / 100).toFixed(2).replace('.', ',');
+      return cur === 'EUR' ? val + ' €' : val + ' ' + cur;
     };
 
-    // Get label size from workspace config or the API config
-    const labelSize = '40x30'; // Default Niimbot B1 label size
+    const content: LabelContent = {
+      // Product
+      productName: (p.productName as string) || (p.name as string) || 'Produit',
+      variant: (p.variant as string) || (p.variants as string) || undefined,
+      sku: (p.sku as string) || undefined,
+      price: (p.price as string) || formatPrice(p.priceCents, p.currency),
+      originalPrice: (p.originalPrice as string) || formatPrice(p.originalPriceCents, p.currency),
+      barcode: (p.barcode as string) || undefined,
+
+      // Order
+      orderId: (p.orderNumber as string) || (p.orderId as string) || undefined,
+      orderDate: (p.orderDate as string) || undefined,
+      orderTotal: (p.orderTotal as string) || (p.orderTotalFormatted as string) || undefined,
+      quantityFraction: buildQuantityFraction(p.quantityIndex, p.quantity),
+
+      // Customer
+      customerName: (p.customerName as string) || undefined,
+      socialHandle: (p.socialHandle as string) || undefined,
+      country: (p.country as string) || undefined,
+
+      // QR & Brand
+      qrCodeUrl: (p.qrCodeUrl as string) || undefined,
+      brandName: (p.brandName as string) || undefined,
+      websiteUrl: (p.websiteUrl as string) || undefined,
+    };
+
+    // Get label size: prefer printer's RFID-detected format, fallback to default
+    const printerFormat = this.store.getPrinterLabelFormat(printerName);
+    const labelSize = printerFormat
+      ? `${printerFormat.widthMm}x${printerFormat.heightMm}`
+      : '40x30';
 
     await this.printer.printNiimbot(printerName, content, labelSize as any);
   }

@@ -24,6 +24,9 @@ interface StoreSchema {
   printedTodayCount: number;
   printedTodayDate: string; // YYYY-MM-DD — reset daily
 
+  // Printer-detected label formats: printerName → { widthMm, heightMm }
+  printerLabelFormats: Record<string, { widthMm: number; heightMm: number }>;
+
   // App settings
   apiUrl: string;
   appUrl: string;
@@ -43,6 +46,7 @@ const STORE_DEFAULTS: StoreSchema = {
   },
   printedTodayCount: 0,
   printedTodayDate: new Date().toISOString().split('T')[0],
+  printerLabelFormats: {},
   apiUrl: API_URLS.production,
   appUrl: APP_URLS.production,
   env: 'production',
@@ -183,6 +187,25 @@ export class StoreService {
       assignments[jobType] = printerName;
       this.store.set('printerAssignments', assignments);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Printer label formats (RFID-detected, per-printer)
+  // ═══════════════════════════════════════════════════════
+
+  getPrinterLabelFormat(printerName: string): { widthMm: number; heightMm: number } | null {
+    const formats = this.store.get('printerLabelFormats');
+    return formats[printerName] || null;
+  }
+
+  setPrinterLabelFormat(printerName: string, format: { widthMm: number; heightMm: number }): void {
+    const formats = this.store.get('printerLabelFormats');
+    formats[printerName] = format;
+    this.store.set('printerLabelFormats', formats);
+  }
+
+  getAllPrinterLabelFormats(): Record<string, { widthMm: number; heightMm: number }> {
+    return this.store.get('printerLabelFormats');
   }
 
   // ═══════════════════════════════════════════════════════

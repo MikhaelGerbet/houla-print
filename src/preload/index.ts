@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('houlaPrint', {
     ipcRenderer.invoke(IPC.PRINTER_TEST, printerName),
   probePrinter: (printerName: string) =>
     ipcRenderer.invoke(IPC.PRINTER_PROBE, printerName),
+  detectLabel: (printerName: string) =>
+    ipcRenderer.invoke(IPC.PRINTER_DETECT, printerName),
   previewLabel: (labelSize: string) =>
     ipcRenderer.invoke(IPC.PRINTER_PREVIEW, labelSize),
 

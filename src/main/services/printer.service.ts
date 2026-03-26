@@ -3,6 +3,26 @@ import { PrinterInfo } from '../../shared/types';
 import { NiimbotService, NiimbotDeviceInfo, renderProductLabel, LabelContent } from './niimbot';
 import { DEFAULT_MODEL, NIIMBOT_MODELS, NiimbotModelSpec } from './niimbot/niimbot-protocol';
 
+/** Shared mock content used for test prints and preview — must produce identical output */
+const MOCK_LABEL_CONTENT: LabelContent = {
+  productName: 'Nom du produit',
+  variant: 'Variante / Couleur',
+  sku: 'REF-001-ABC',
+  price: '29,90 \u20ac',
+  originalPrice: '39,90 \u20ac',
+  barcode: '3760001234567',
+  brandName: 'Ma Boutique',
+  orderId: '#10042',
+  orderDate: '26/03/2026',
+  orderTotal: '89,70 \u20ac',
+  quantityFraction: '1/3',
+  customerName: 'Jean Dupont',
+  socialHandle: '@jean.dupont',
+  country: 'France',
+  qrCodeUrl: 'https://hou.la/abc123',
+  websiteUrl: 'www.maboutique.com',
+};
+
 // Zebra / thermal printer name patterns
 const THERMAL_PATTERNS = [/zebra/i, /zd[24]\d{2}/i, /gk4\d{2}/i, /gx4\d{2}/i, /zt[24]\d{2}/i, /brother\s*ql/i, /dymo/i];
 // Receipt printer patterns
@@ -249,9 +269,10 @@ export class PrinterService {
   }
 
   /**
-   * Test print on a Niimbot printer.
+   * Test print on a Niimbot printer — uses the V2 mock label layout.
+   * Auto-detects label dimensions via RFID, then prints a full mock label.
    */
-  private async testPrintNiimbot(printerName: string): Promise<{ success: boolean; error?: string }> {
+  private async testPrintNiimbot(printerName: string): Promise<{ success: boolean; error?: string; detectedLabel?: { widthMm: number; heightMm: number; remaining: number } }> {
     const portPath = this.extractNiimbotPort(printerName);
     console.log(`[Printer] testPrintNiimbot: port=${portPath}, printerName=${printerName}`);
 
@@ -264,15 +285,63 @@ export class PrinterService {
 
       await this.niimbot.connect(portPath);
       this.connectedNiimbotPort = portPath;
-      console.log('[Printer] Niimbot connected, sending test print...');
-      const result = await this.niimbot.testPrint();
+      console.log('[Printer] Niimbot connected, detecting label + printing mock...');
+
+      // Detect label size via RFID
+      let detectedLabel: { widthMm: number; heightMm: number; remaining: number } | undefined;
+      const rfid = await this.niimbot.readRfidLabel();
+      if (rfid && rfid.heightMm > 0) {
+        detectedLabel = { widthMm: rfid.widthMm, heightMm: rfid.heightMm, remaining: rfid.remaining };
+        console.log(`[Printer] RFID detected: ${rfid.widthMm}x${rfid.heightMm}mm, remaining=${rfid.remaining}`);
+      }
+
+      // Determine label size for rendering
+      const labelSize = detectedLabel
+        ? `${detectedLabel.widthMm}x${detectedLabel.heightMm}` as any
+        : '40x30';
+
+      // Render the V2 mock label (same content as preview)
+      const label = renderProductLabel(MOCK_LABEL_CONTENT, labelSize, DEFAULT_MODEL);
+      const result = await this.niimbot.printBitmap(label.bitmap, label.widthDots, label.heightDots);
+
       console.log(`[Printer] Test print result: success=${result.success}, error=${result.error || 'none'}`);
-      return result;
+      return { ...result, detectedLabel };
     } catch (err: any) {
       console.error(`[Printer] testPrintNiimbot failed:`, err.message);
       return { success: false, error: err.message || String(err) };
     } finally {
       // Always disconnect after test print to release the port
+      try { await this.niimbot.disconnect(); } catch { /* ignore */ }
+      this.connectedNiimbotPort = null;
+    }
+  }
+
+  /**
+   * Auto-detect label dimensions via RFID without printing.
+   * Connects to the Niimbot, reads RFID, returns detected format.
+   */
+  async detectNiimbotLabel(printerName: string): Promise<{ success: boolean; detectedLabel?: { widthMm: number; heightMm: number; remaining: number }; error?: string }> {
+    const portPath = this.extractNiimbotPort(printerName);
+    console.log(`[Printer] detectNiimbotLabel: port=${portPath}`);
+
+    try {
+      if (this.niimbot.isConnected()) {
+        await this.niimbot.disconnect();
+      }
+
+      await this.niimbot.connect(portPath);
+      this.connectedNiimbotPort = portPath;
+
+      const rfid = await this.niimbot.readRfidLabel();
+      if (rfid && rfid.heightMm > 0) {
+        console.log(`[Printer] RFID detected: ${rfid.widthMm}x${rfid.heightMm}mm, remaining=${rfid.remaining}`);
+        return { success: true, detectedLabel: { widthMm: rfid.widthMm, heightMm: rfid.heightMm, remaining: rfid.remaining } };
+      }
+      return { success: false, error: 'Aucune etiquette RFID detectee' };
+    } catch (err: any) {
+      console.error(`[Printer] detectNiimbotLabel failed:`, err.message);
+      return { success: false, error: err.message || String(err) };
+    } finally {
       try { await this.niimbot.disconnect(); } catch { /* ignore */ }
       this.connectedNiimbotPort = null;
     }
@@ -303,16 +372,7 @@ export class PrinterService {
    * Renders a mock product label at the given size and returns a data URI.
    */
   generatePreviewBase64(labelSize: import('../../shared/types').PrintLabelSize): string {
-    const mockContent: LabelContent = {
-      productName: 'Exemple produit',
-      price: '12,50 €',
-      barcode: '3760001234567',
-      brandName: 'Ma Boutique',
-      sku: 'SKU-001',
-      variant: 'Taille M / Bleu',
-    };
-
-    const label = renderProductLabel(mockContent, labelSize, DEFAULT_MODEL);
+    const label = renderProductLabel(MOCK_LABEL_CONTENT, labelSize, DEFAULT_MODEL);
     return bitmapToBmpBase64(label.bitmap, label.widthDots, label.heightDots);
   }
 
