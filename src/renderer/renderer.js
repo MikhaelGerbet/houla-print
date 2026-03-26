@@ -65,6 +65,7 @@ const LABEL_SIZE_OPTIONS = [
 // ═══════════════════════════════════════════════════════
 
 let currentState = null;
+let testPrintInProgress = false;
 
 function updateUI(state) {
   currentState = state;
@@ -109,14 +110,19 @@ function updateUI(state) {
   // Error banner
   if (state.lastError) {
     $errorBanner.classList.remove('hidden');
-    $errorText.textContent = state.lastError;
+    const isApiError = state.connectionStatus === 'error';
+    $errorText.textContent = isApiError
+      ? '⚠ ' + state.lastError
+      : state.lastError;
   } else {
     $errorBanner.classList.add('hidden');
   }
 
   // Render lists
   renderWorkspaces(state.workspaces);
-  renderPrinters(state.printers);
+  if (!testPrintInProgress) {
+    renderPrinters(state.printers);
+  }
   renderAssignments(state.printerAssignments, state.printers);
   renderLabelSizes(state.workspaces);
 }
@@ -199,6 +205,9 @@ function renderPrinters(printers) {
       const name = btn.dataset.testPrinter;
       const labelSpan = btn.querySelector('.btn-test-label');
 
+      // Prevent re-render from wiping button state during print
+      testPrintInProgress = true;
+
       // Disable button and show loading state
       btn.disabled = true;
       btn.classList.add('btn-test-loading');
@@ -211,6 +220,12 @@ function renderPrinters(printers) {
         if (result.success) {
           btn.classList.add('btn-test-success');
           if (labelSpan) labelSpan.textContent = '✓ OK';
+          // If RFID detected a label size, update the dropdown
+          if (result.detectedLabel) {
+            const dl = result.detectedLabel;
+            const sizeStr = dl.widthMm + 'x' + dl.heightMm;
+            updateDetectedLabelSize(sizeStr, dl);
+          }
         } else {
           btn.classList.add('btn-test-error');
           if (labelSpan) labelSpan.textContent = '✕ ' + (result.error || 'Erreur');
@@ -222,6 +237,7 @@ function renderPrinters(printers) {
       }
 
       setTimeout(() => {
+        testPrintInProgress = false;
         btn.disabled = false;
         btn.classList.remove('btn-test-success', 'btn-test-error');
         if (labelSpan) labelSpan.textContent = 'Test';
@@ -332,6 +348,37 @@ async function loadLabelPreview(labelSize) {
   }
 }
 
+/**
+ * Update the label size dropdown when RFID auto-detects a label.
+ * If the detected size matches a known option, select it.
+ * If not, add it as a custom option.
+ */
+function updateDetectedLabelSize(sizeStr, detectedLabel) {
+  if (!$labelSizeList) return;
+  const selects = $labelSizeList.querySelectorAll('select');
+  selects.forEach(el => {
+    // Check if the size exists in the dropdown
+    const existing = Array.from(el.options).find(o => o.value === sizeStr);
+    if (existing) {
+      el.value = sizeStr;
+    } else {
+      // Add a custom option for the detected size
+      const opt = document.createElement('option');
+      opt.value = sizeStr;
+      opt.textContent = detectedLabel.widthMm + ' × ' + detectedLabel.heightMm + ' mm — Détecté (RFID)';
+      el.appendChild(opt);
+      el.value = sizeStr;
+    }
+    // Persist to workspace config
+    const wsId = el.dataset.wsLabelSize;
+    if (wsId) {
+      api.updateWorkspaceConfig(wsId, { productLabelSize: sizeStr });
+    }
+    loadLabelPreview(sizeStr);
+  });
+  console.log('[Renderer] Label size updated from RFID: ' + sizeStr);
+}
+
 
 
 document.querySelectorAll('.tab').forEach(tab => {
@@ -371,8 +418,22 @@ bindBtn('btn-login', () => api.login());
 bindBtn('btn-logout', () => api.logout());
 bindBtn('btn-minimize', () => api.minimize());
 bindBtn('btn-close', () => api.minimize());
-bindBtn('btn-refresh-workspaces', () => api.refreshWorkspaces());
-bindBtn('btn-refresh-printers', () => api.listPrinters());
+bindBtn('btn-refresh-workspaces', async () => {
+  $workspaceList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Chargement des boutiques…</div>';
+  try {
+    await api.refreshWorkspaces();
+  } catch (err) {
+    $workspaceList.innerHTML = '<div class="error-state">Erreur : ' + escapeHtml(err.message || 'Impossible de charger les boutiques') + '</div>';
+  }
+});
+bindBtn('btn-refresh-printers', async () => {
+  $printerList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Détection des imprimantes…</div>';
+  try {
+    await api.listPrinters();
+  } catch (err) {
+    $printerList.innerHTML = '<div class="error-state">Erreur : ' + escapeHtml(err.message || 'Impossible de détecter les imprimantes') + '</div>';
+  }
+});
 bindBtn('btn-retry-all', () => api.retryAllFailed());
 bindBtn('btn-open-dashboard', () => {
   const appUrl = currentState?.appUrl || 'https://app.hou.la';
@@ -386,7 +447,14 @@ bindBtn('btn-open-dashboard', () => {
 api.onStateUpdated((state) => updateUI(state));
 
 // Initial state fetch
-api.getState().then((state) => updateUI(state));
+api.getState().then((state) => {
+  updateUI(state);
+  // Auto-detect printers on startup if authenticated and list is empty
+  if (state.authenticated && (!state.printers || state.printers.length === 0)) {
+    $printerList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Détection des imprimantes…</div>';
+    api.listPrinters().catch(() => {});
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // Helpers

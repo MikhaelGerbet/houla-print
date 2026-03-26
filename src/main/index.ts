@@ -237,6 +237,7 @@ function initServices(): void {
   api = new ApiService(store);
   auth = new AuthService(store, api);
   printer = new PrinterService();
+  printer.setOnStateChanged(() => broadcastState());
   queue = new QueueService(store, api, printer);
   workspaces = new WorkspaceService(store, api);
   socket = new SocketService(store, queue, workspaces, () => broadcastState());
@@ -348,7 +349,16 @@ function registerIpcHandlers(): void {
   });
 
   // Printers
-  ipcMain.handle(IPC.PRINTER_LIST, () => printer.detectPrinters());
+  ipcMain.handle(IPC.PRINTER_LIST, async () => {
+    try {
+      const printers = await printer.detectPrinters();
+      broadcastState();
+      return printers;
+    } catch (err) {
+      console.error('[Main] printer:list failed:', (err as Error).message);
+      return printer.getLastDetected();
+    }
+  });
   ipcMain.handle(IPC.PRINTER_ASSIGN, (_e, jobType: string, printerName: string | null) => {
     store.setPrinterAssignment(jobType, printerName);
     broadcastState();

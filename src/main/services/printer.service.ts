@@ -20,8 +20,18 @@ export class PrinterService {
   private niimbotDevices: NiimbotDeviceInfo[] = [];
   private connectedNiimbotPort: string | null = null;
 
+  /** Callback to broadcast state changes (set by main process) */
+  private onStateChanged: (() => void) | null = null;
+
+  /** Register a callback to be called when printer list changes asynchronously */
+  setOnStateChanged(cb: () => void): void {
+    this.onStateChanged = cb;
+  }
+
   /**
    * Detect all system printers via Electron's webContents API + Niimbot serial ports.
+   * Returns fast with OS printers + USB-identified Niimbot devices.
+   * BT ports are probed asynchronously — the state callback fires when they're done.
    */
   async detectPrinters(): Promise<PrinterInfo[]> {
     const win = BrowserWindow.getAllWindows()[0];
@@ -41,11 +51,11 @@ export class PrinterService {
       }
     }
 
-    // Discover Niimbot printers on serial ports
+    // Fast path: discover Niimbot printers (no port opened, instant)
     try {
-      this.niimbotDevices = await this.niimbot.discover();
-      for (const dev of this.niimbotDevices) {
-        // Avoid duplicates if already listed as OS printer
+      const { immediate } = await this.niimbot.discoverFast();
+      this.niimbotDevices = immediate;
+      for (const dev of immediate) {
         const alreadyListed = osPrinters.some(p => p.name === dev.port);
         if (!alreadyListed) {
           osPrinters.push({
@@ -69,7 +79,6 @@ export class PrinterService {
         const alreadyListed = osPrinters.some(pr =>
           pr.name === `niimbot:${p.port}` || pr.name === p.port);
         if (!alreadyListed && p.manufacturer) {
-          // Show COM ports that have a manufacturer (likely real devices, not internal)
           osPrinters.push({
             name: `niimbot:${p.port}`,
             displayName: 'Niimbot',

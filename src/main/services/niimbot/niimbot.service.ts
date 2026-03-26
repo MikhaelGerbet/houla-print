@@ -26,7 +26,7 @@ import {
   buildStartPrint,
   buildEndPrint,
   buildSetQuantity,
-  buildSetDimension,
+  buildSetPageSize,
   buildStartPagePrint,
   buildEndPagePrint,
   buildHeartbeat,
@@ -67,13 +67,22 @@ export class NiimbotService {
 
   /**
    * List all serial ports that could be Niimbot printers.
-   * For Bluetooth serial ports with no identifying name, actively probes
-   * with a quick CONNECT handshake to detect Niimbot devices.
+   * Returns only immediately-identifiable devices (USB VID match, name patterns).
+   * BT ports are NOT probed here — caller should use discoverFast() and probe async.
    */
   async discover(): Promise<NiimbotDeviceInfo[]> {
+    const { immediate } = await this.discoverFast();
+    return immediate;
+  }
+
+  /**
+   * Fast discovery: returns USB-identified and BT Niimbot printers immediately.
+   * No port is opened — identification is based on VID, name patterns, and BT metadata.
+   */
+  async discoverFast(): Promise<{ immediate: NiimbotDeviceInfo[]; pendingBtProbe: NiimbotDeviceInfo[] }> {
     const ports = await SerialPort.list();
-    const candidates: NiimbotDeviceInfo[] = [];
-    const bluetoothToProbe: NiimbotDeviceInfo[] = [];
+    const immediate: NiimbotDeviceInfo[] = [];
+    const pendingBtProbe: NiimbotDeviceInfo[] = []; // kept empty — no probing
 
     console.log(`[Niimbot] Serial ports found: ${ports.length}`);
     for (const p of ports) {
@@ -97,186 +106,17 @@ export class NiimbotService {
       };
 
       if (isNiimbot) {
-        candidates.push(info);
-      } else if (isBluetooth) {
-        bluetoothToProbe.push(info);
+        immediate.push(info);
+      } else if (isBluetooth && !this.deadPorts.has(p.path)) {
+        // Add BT ports as potential Niimbot printers without probing
+        // Connection will happen only when user clicks Test or prints
+        info.modelName = 'Niimbot (Bluetooth)';
+        immediate.push(info);
       }
     }
 
-    // Actively probe unrecognized Bluetooth serial ports with a quick handshake
-    if (bluetoothToProbe.length > 0) {
-      // Skip probing if we're already busy (e.g. a print job is running)
-      if (this.busy) {
-        console.log(`[Niimbot] Skipping BT probe — serial port busy`);
-      } else {
-        console.log(`[Niimbot] Probing ${bluetoothToProbe.length} Bluetooth port(s)...`);
-        for (const bt of bluetoothToProbe) {
-          // Skip ports that previously failed with unrecoverable errors
-          if (this.deadPorts.has(bt.port)) {
-            console.log(`[Niimbot]   ${bt.port}: skipped (known dead port)`);
-            continue;
-          }
-          const probeResult = await this.quickProbe(bt.port);
-          if (probeResult) {
-            bt.modelName = probeResult;
-            candidates.push(bt);
-            console.log(`[Niimbot]   ${bt.port}: Niimbot detected (${probeResult})`);
-          } else {
-            console.log(`[Niimbot]   ${bt.port}: no Niimbot response`);
-          }
-        }
-      }
-    }
-
-    console.log(`[Niimbot] Discovered ${candidates.length} Niimbot candidate(s): ${candidates.map(c => c.port).join(', ') || 'none'}`);
-    return candidates;
-  }
-
-  /**
-   * Quick probe: try opening a serial port and sending CONNECT to check if
-   * a Niimbot printer is on the other end. Returns model name or null.
-   * Uses a short timeout and a temporary port instance to avoid
-   * interfering with the main connection.
-   *
-   * For Bluetooth SPP ports, the virtual COM port opens instantly but the
-   * underlying BT link may take 500ms+ to become writable — we retry
-   * the CONNECT write if the first attempt fails with "Operation aborted".
-   */
-  private async quickProbe(portPath: string): Promise<string | null> {
-    if (this.busy) return null;
-    this.busy = true;
-    let probePort: SerialPort | null = null;
-    let writeAborted = false;
-
-    try {
-      probePort = new SerialPort({
-        path: portPath,
-        baudRate: 115200,
-        dataBits: 8,
-        stopBits: 1,
-        parity: 'none',
-        autoOpen: false,
-      });
-
-      // Capture errors so they don't become uncaught exceptions
-      probePort.on('error', (err) => {
-        if (/operation aborted/i.test(err.message)) writeAborted = true;
-        console.log(`[Niimbot]   ${portPath}: port error during probe (${err.message})`);
-      });
-
-      // Open the port
-      await new Promise<void>((resolve, reject) => {
-        probePort!.open((err) => err ? reject(err) : resolve());
-      });
-
-      // Wait for the BT SPP link to fully establish (2s minimum)
-      console.log(`[Niimbot]   ${portPath}: port opened, waiting 2s for BT link...`);
-      await new Promise(r => setTimeout(r, 2000));
-
-      if (writeAborted || !probePort?.isOpen) {
-        // This is the incoming BT port — mark as dead
-        this.deadPorts.add(portPath);
-        console.log(`[Niimbot]   ${portPath}: marked as dead (incoming BT port)`);
-        return null;
-      }
-
-      // Send CONNECT packet
-      const connectPkt = buildConnect();
-      console.log(`[Niimbot]   ${portPath}: sending CONNECT (${connectPkt.toString('hex')})`);
-      let rxBuf = Buffer.alloc(0);
-
-      const gotAck = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => {
-          probePort?.removeListener('data', onData);
-          resolve(false);
-        }, 5000);
-
-        const onData = (chunk: Buffer) => {
-          console.log(`[Niimbot]   ${portPath}: RX ${chunk.toString('hex')}`);
-          rxBuf = Buffer.concat([rxBuf, chunk]);
-          const { packets } = decodePackets(rxBuf);
-          for (const pkt of packets) {
-            if (pkt.command === NiimbotResponse.CONNECT_ACK) {
-              clearTimeout(timer);
-              probePort?.removeListener('data', onData);
-              resolve(true);
-              return;
-            }
-          }
-        };
-        probePort!.on('data', onData);
-
-        probePort!.write(connectPkt, (writeErr) => {
-          if (writeErr) {
-            console.log(`[Niimbot]   ${portPath}: write error (${writeErr.message})`);
-            clearTimeout(timer);
-            probePort?.removeListener('data', onData);
-            resolve(false);
-            return;
-          }
-          // Flush the OS buffer — critical for BT SPP
-          probePort!.drain((drainErr) => {
-            if (drainErr) console.log(`[Niimbot]   ${portPath}: drain error (${drainErr.message})`);
-            else console.log(`[Niimbot]   ${portPath}: data flushed, waiting for response...`);
-          });
-        });
-      });
-
-      if (writeAborted) {
-        this.deadPorts.add(portPath);
-        console.log(`[Niimbot]   ${portPath}: marked as dead (write aborted)`);
-        return null;
-      }
-
-      if (!gotAck) return null;
-
-      console.log(`[Niimbot]   ${portPath}: ACK received!`);
-
-      // Try to read area width to identify model
-      let modelName = 'Niimbot';
-      try {
-        const infoPkt = buildGetInfo(InfoCommand.AREA_WIDTH);
-        rxBuf = Buffer.alloc(0);
-
-        const width = await new Promise<number>((resolve) => {
-          const timer = setTimeout(() => resolve(0), 2000);
-          const onData = (chunk: Buffer) => {
-            rxBuf = Buffer.concat([rxBuf, chunk]);
-            const { packets } = decodePackets(rxBuf);
-            for (const pkt of packets) {
-              if (pkt.command === NiimbotResponse.GET_INFO_ACK && pkt.data.length >= 2) {
-                clearTimeout(timer);
-                probePort?.removeListener('data', onData);
-                resolve((pkt.data[0] << 8) | pkt.data[1]);
-                return;
-              }
-            }
-          };
-          probePort!.on('data', onData);
-          probePort!.write(infoPkt, () => probePort!.drain(() => {}));
-        });
-
-        if (width > 0) {
-          for (const [, spec] of Object.entries(NIIMBOT_MODELS)) {
-            if (spec.printWidthDots === width) {
-              modelName = spec.name;
-              break;
-            }
-          }
-          if (modelName === 'Niimbot') modelName = `Niimbot (${width}dots)`;
-        }
-      } catch { /* ignore info read failure */ }
-
-      return modelName;
-    } catch (err) {
-      console.log(`[Niimbot]   ${portPath}: probe failed (${(err as Error).message})`);
-      return null;
-    } finally {
-      this.busy = false;
-      if (probePort?.isOpen) {
-        await new Promise<void>(resolve => probePort!.close(() => resolve()));
-      }
-    }
+    console.log(`[Niimbot] Discover: ${immediate.length} candidate(s), 0 to probe`);
+    return { immediate, pendingBtProbe };
   }
 
   /**
@@ -417,7 +257,7 @@ export class NiimbotService {
   async probeModel(portPath: string): Promise<{
     modelName: string;
     widthDots: number;
-    detectedLabel?: { widthMm: number; heightMm: number; remaining: number };
+    detectedLabel?: { widthMm: number; heightMm: number; remaining: number; barCode: string };
   }> {
     const wasConnected = this.isConnected();
     try {
@@ -454,14 +294,21 @@ export class NiimbotService {
   }
 
   /**
-   * Read RFID data from the loaded label roll to detect label dimensions.
-   * Returns null if no RFID data is available (non-RFID rolls or unsupported models).
+   * Read RFID data from the loaded label roll.
    *
-   * Niimbot RFID response format:
-   *   [uuid... (variable)] [widthMm (1 byte)] [heightMm (1 byte)] [qty_hi] [qty_lo] [type (1 byte)]
-   * The last 5 bytes contain: width, height, remaining quantity (u16BE), label type.
+   * NiimBlue RFID response format (cmd 0x1b):
+   *   [uuid (8 bytes)] [barCode (VString)] [serialNumber (VString)]
+   *   [allPaper (u16BE)] [usedPaper (u16BE)] [consumablesType (u8)]
+   *   [capacity (u16BE, optional)]
+   *
+   * The barCode is an opaque label identifier. The official Niimbot app sends
+   * it to their cloud API to resolve label dimensions. We try the same API,
+   * and fall back to null if it's unavailable.
    */
-  async readRfidLabel(): Promise<{ widthMm: number; heightMm: number; remaining: number } | null> {
+  async readRfidLabel(): Promise<{
+    widthMm: number; heightMm: number; remaining: number;
+    barCode: string; serialNumber: string; uuid: string;
+  } | null> {
     try {
       const pkt = await this.sendAndWait(
         buildGetRfid(),
@@ -469,21 +316,127 @@ export class NiimbotService {
         3000,
       );
 
-      // Empty or too-short response means no RFID tag / no data
-      if (!pkt.data || pkt.data.length < 5) return null;
+      // Single-byte response means no RFID tag
+      if (!pkt.data || pkt.data.length <= 1) return null;
 
       const d = pkt.data;
-      const len = d.length;
-      // Last 5 bytes: [widthMm, heightMm, qty_hi, qty_lo, labelType]
-      const widthMm = d[len - 5];
-      const heightMm = d[len - 4];
-      const remaining = (d[len - 3] << 8) | d[len - 2];
+      console.log(`[Niimbot] RFID raw (${d.length} bytes): ${d.toString('hex')}`);
 
-      if (widthMm === 0 || heightMm === 0) return null;
+      // Parse using NiimBlue's format: UUID(8) + VString(barCode) + VString(serial) + allPaper(2) + usedPaper(2) + consumablesType(1)
+      let offset = 0;
 
-      return { widthMm, heightMm, remaining };
-    } catch {
-      // Timeout or unsupported — not all models/rolls have RFID
+      // UUID: 8 bytes
+      if (d.length < 8) return null;
+      const uuid = d.subarray(0, 8).toString('hex');
+      offset = 8;
+
+      // barCode: VString (1 byte length + N bytes)
+      if (offset >= d.length) return null;
+      const barCodeLen = d[offset++];
+      if (offset + barCodeLen > d.length) return null;
+      const barCode = d.subarray(offset, offset + barCodeLen).toString('ascii');
+      offset += barCodeLen;
+
+      // serialNumber: VString (1 byte length + N bytes)
+      if (offset >= d.length) return null;
+      const serialLen = d[offset++];
+      if (offset + serialLen > d.length) return null;
+      const serialNumber = d.subarray(offset, offset + serialLen).toString('ascii');
+      offset += serialLen;
+
+      // allPaper (u16BE) — total labels on roll
+      let allPaper = -1;
+      if (offset + 2 <= d.length) {
+        allPaper = (d[offset] << 8) | d[offset + 1];
+        offset += 2;
+      }
+
+      // usedPaper (u16BE) — used labels
+      let usedPaper = -1;
+      if (offset + 2 <= d.length) {
+        usedPaper = (d[offset] << 8) | d[offset + 1];
+        offset += 2;
+      }
+
+      // consumablesType (u8)
+      let consumablesType = -1;
+      if (offset < d.length) {
+        consumablesType = d[offset++];
+      }
+
+      const remaining = allPaper >= 0 && usedPaper >= 0 ? allPaper - usedPaper : -1;
+
+      console.log(`[Niimbot] RFID parsed: uuid=${uuid}, barCode=${barCode}, serial=${serialNumber}, allPaper=${allPaper}, usedPaper=${usedPaper}, type=${consumablesType}, remaining=${remaining}`);
+
+      if (!barCode) return null;
+
+      // Try to resolve label dimensions via Niimbot cloud API
+      const dims = await this.resolveBarcodeDimensions(barCode);
+      if (dims) {
+        console.log(`[Niimbot] Cloud API resolved barCode ${barCode} → ${dims.widthMm}x${dims.heightMm}mm`);
+        return { widthMm: dims.widthMm, heightMm: dims.heightMm, remaining, barCode, serialNumber, uuid };
+      }
+
+      console.log(`[Niimbot] Cloud API did not resolve barCode ${barCode}, dimensions unknown`);
+      return null;
+    } catch (err: any) {
+      console.log(`[Niimbot] RFID read failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Try to resolve label dimensions from the Niimbot cloud API using the barCode.
+   * This is the same API the official Niimbot app uses to get label parameters.
+   * Returns null on any failure (network, timeout, unexpected format).
+   */
+  private async resolveBarcodeDimensions(barCode: string): Promise<{ widthMm: number; heightMm: number } | null> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const resp = await fetch('https://print.niimbot.com/api/template/getCloudTemplateByOneCode', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'niimbot-user-agent': 'AppVersionName/999.0.0',
+        },
+        body: JSON.stringify({ oneCode: barCode }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!resp.ok) {
+        console.log(`[Niimbot] Cloud API HTTP ${resp.status}`);
+        return null;
+      }
+
+      const json: any = await resp.json();
+      console.log(`[Niimbot] Cloud API response: ${JSON.stringify(json).substring(0, 500)}`);
+
+      // The API response format contains label dimensions — extract them
+      // Known fields: width, height (in mm) inside the response data
+      // IMPORTANT: the API may return a "rotate" field (0, 90, 270).
+      // When rotate=90 or rotate=270, the dimensions are in template orientation
+      // and must be swapped to get the physical label dimensions in the printer.
+      const data = json?.data;
+      if (data) {
+        let widthMm = data.width || data.labelWidth || data.paperWidth;
+        let heightMm = data.height || data.labelHeight || data.paperHeight;
+        if (widthMm > 0 && heightMm > 0) {
+          const rotate = data.rotate || 0;
+          if (rotate === 90 || rotate === 270) {
+            console.log(`[Niimbot] Cloud API rotate=${rotate}, swapping ${widthMm}x${heightMm} → ${heightMm}x${widthMm}`);
+            [widthMm, heightMm] = [heightMm, widthMm];
+          }
+          return { widthMm, heightMm };
+        }
+      }
+
+      return null;
+    } catch (err: any) {
+      console.log(`[Niimbot] Cloud API failed: ${err.message}`);
       return null;
     }
   }
@@ -513,55 +466,35 @@ export class NiimbotService {
     const bytesPerRow = Math.ceil(widthDots / 8);
 
     try {
-      // Command order follows NiimBlue reference implementation for B1/B21
-      // 1. Set label parameters
-      await this.sendAndWait(buildSetLabelType(labelType), NiimbotResponse.SET_LABEL_TYPE_ACK, 3000);
+      // B1 print task sequence (from NiimBlue official docs)
+      // Init phase
       await this.sendAndWait(buildSetDensity(density), NiimbotResponse.SET_LABEL_DENSITY_ACK, 3000);
+      await this.sendAndWait(buildSetLabelType(labelType), NiimbotResponse.SET_LABEL_TYPE_ACK, 3000);
+      await this.sendAndWait(buildStartPrint(quantity), NiimbotResponse.START_PRINT_ACK, 5000);
 
-      // 2. Start print session
-      await this.sendAndWait(buildStartPrint(), NiimbotResponse.START_PRINT_ACK, 5000);
-
-      // 3. Start page FIRST — creates the page context
+      // Page phase
       await this.sendAndWait(buildStartPagePrint(), NiimbotResponse.START_PAGE_ACK, 3000);
+      await this.sendAndWait(buildSetPageSize(heightDots, widthDots, quantity), NiimbotResponse.SET_PAGE_SIZE_ACK, 3000);
 
-      // 4. Set page dimensions and quantity INSIDE the page context (NiimBlue order)
-      await this.sendAndWait(buildSetDimension(widthDots, heightDots), NiimbotResponse.SET_DIMENSION_ACK, 3000);
-      await this.sendAndWait(buildSetQuantity(quantity), NiimbotResponse.SET_QUANTITY_ACK, 3000);
-
-      // 5. Send image data row by row
-      //    NiimBlue waits for ACK (0x86) on each row. Our previous fire-and-forget
-      //    attempt failed because the printer needs flow control.
-      //    Strategy: try sendAndWait on row 0; if ACK comes, use it for all rows.
-      //    If timeout, fall back to fire-and-forget.
+      // Image data — one-way packets, no ACK expected per NiimBlue protocol
       console.log(`[Niimbot] Sending ${heightDots} image rows (${bytesPerRow}B each), dimension=${widthDots}w x ${heightDots}h`);
-      const firstRowData = bitmap.subarray(0, bytesPerRow);
-      console.log(`[Niimbot] Row 0 hex: ${firstRowData.toString('hex')}`);
 
-      let useAck = true;
-      try {
-        await this.sendAndWait(buildImageRow(0, firstRowData), NiimbotResponse.IMAGE_DATA_ACK, 2000);
-        console.log('[Niimbot] Row 0 ACK received — using ACK mode for all rows.');
-      } catch {
-        console.log('[Niimbot] Row 0 no ACK — falling back to fire-and-forget mode.');
-        useAck = false;
-      }
-
-      for (let row = (useAck ? 1 : 1); row < heightDots; row++) {
+      for (let row = 0; row < heightDots; row++) {
         const rowStart = row * bytesPerRow;
         const rowData = bitmap.subarray(rowStart, rowStart + bytesPerRow);
         const paddedRow = rowData.length < bytesPerRow
           ? Buffer.concat([rowData, Buffer.alloc(bytesPerRow - rowData.length)])
           : rowData;
 
-        if (useAck) {
-          await this.sendAndWait(buildImageRow(row, paddedRow), NiimbotResponse.IMAGE_DATA_ACK, 2000);
-        } else {
-          await this.sendRow(buildImageRow(row, paddedRow));
+        if (row === 0) {
+          console.log(`[Niimbot] Row 0 hex: ${paddedRow.toString('hex')}`);
         }
+
+        await this.sendRow(buildImageRow(row, paddedRow));
       }
       console.log(`[Niimbot] All ${heightDots} rows sent.`);
 
-      // 6. End page — signals printer that all row data has been sent
+      // End page
       await this.sendAndWait(buildEndPagePrint(), NiimbotResponse.END_PAGE_ACK, 10000);
 
       // 7. Poll print status until printer confirms page is done
@@ -581,11 +514,26 @@ export class NiimbotService {
 
   /**
    * Send a test label (small "Hou.la Print" text).
+   * Auto-detects label dimensions via RFID + Niimbot cloud API if available.
+   * Width always = print head width.
    */
   async testPrint(): Promise<NiimbotPrintResult> {
-    // Generate a simple test pattern: 384x200 dots
+    const DPI = 8; // dots per mm for 203 DPI printers
+
+    // Width always matches the print head (384 dots for B1)
     const w = this.model.printWidthDots;
-    const h = 200;
+    let h = 240; // default fallback (~30mm)
+    let detectedLabel: { widthMm: number; heightMm: number; remaining: number } | null = null;
+
+    // Try RFID + cloud API auto-detect for label dimensions
+    const rfid = await this.readRfidLabel();
+    if (rfid && rfid.heightMm > 0) {
+      h = rfid.heightMm * DPI;
+      detectedLabel = rfid;
+      console.log(`[Niimbot] Label detected: ${rfid.widthMm}x${rfid.heightMm}mm → ${w}x${h} dots (barCode=${rfid.barCode}, remaining=${rfid.remaining})`);
+    } else {
+      console.log(`[Niimbot] No label dimensions detected, using defaults: ${w}x${h} dots`);
+    }
     const bytesPerRow = Math.ceil(w / 8);
     const bitmap = Buffer.alloc(bytesPerRow * h, 0x00); // all white
 
@@ -613,7 +561,12 @@ export class NiimbotService {
     const textStartY = Math.floor((h - testPattern.height) / 2);
     overlayBitmap(bitmap, bytesPerRow, testPattern, textStartX, textStartY);
 
-    return this.printBitmap(bitmap, w, h);
+    const result = await this.printBitmap(bitmap, w, h);
+    // Attach detected label info for the caller to use
+    if (detectedLabel) {
+      (result as any).detectedLabel = detectedLabel;
+    }
+    return result;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -677,8 +630,8 @@ export class NiimbotService {
         if (writeErr) { reject(writeErr); return; }
         this.port!.drain((drainErr) => {
           if (drainErr) { reject(drainErr); return; }
-          // Small pacing delay to avoid overflowing the printer buffer
-          setTimeout(resolve, 5);
+          // Small pacing delay to avoid overflowing the printer buffer over BT
+          setTimeout(resolve, 20);
         });
       });
     });

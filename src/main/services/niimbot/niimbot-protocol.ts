@@ -30,7 +30,7 @@ export enum NiimbotCommand {
   END_PRINT              = 0xf3,
   START_PAGE_PRINT       = 0x03,
   END_PAGE_PRINT         = 0xe3,
-  SET_DIMENSION          = 0xd4,
+  SET_PAGE_SIZE          = 0x13,
   SET_QUANTITY           = 0x15,
   HEARTBEAT              = 0xdc,
   IMAGE_DATA             = 0x85,
@@ -51,7 +51,7 @@ export enum NiimbotResponse {
   END_PRINT_ACK          = 0xf4,
   START_PAGE_ACK         = 0x04,  // 0x03 + 1
   END_PAGE_ACK           = 0xe4,
-  SET_DIMENSION_ACK      = 0xd5,  // 0xd4 + 1
+  SET_PAGE_SIZE_ACK      = 0x14,  // 0x13 + 1
   SET_QUANTITY_ACK       = 0x16,  // 0x15 + 1
   HEARTBEAT_ACK          = 0xdd,
   IMAGE_DATA_ACK         = 0x86,  // 0x85 + 1
@@ -225,8 +225,12 @@ export function buildSetDensity(density: number): Buffer {
   return encodePacket(NiimbotCommand.SET_LABEL_DENSITY, [Math.max(1, Math.min(5, density))]);
 }
 
-export function buildStartPrint(): Buffer {
-  return encodePacket(NiimbotCommand.START_PRINT, [0x01]);
+export function buildStartPrint(totalPages = 1): Buffer {
+  // B1 print task: 7 bytes [totalPages(u16), 0, 0, 0, 0, pageColor(u8)]
+  return encodePacket(NiimbotCommand.START_PRINT, [
+    (totalPages >> 8) & 0xff, totalPages & 0xff,
+    0x00, 0x00, 0x00, 0x00, 0x00,
+  ]);
 }
 
 export function buildEndPrint(): Buffer {
@@ -239,11 +243,12 @@ export function buildSetQuantity(quantity: number): Buffer {
   return encodePacket(NiimbotCommand.SET_QUANTITY, [hi, lo]);
 }
 
-export function buildSetDimension(widthDots: number, heightDots: number): Buffer {
-  // Wire format: [width_hi, width_lo, height_hi, height_lo] (NiimBlue convention)
-  return encodePacket(NiimbotCommand.SET_DIMENSION, [
-    (widthDots >> 8) & 0xff, widthDots & 0xff,
-    (heightDots >> 8) & 0xff, heightDots & 0xff,
+export function buildSetPageSize(rows: number, cols: number, copies = 1): Buffer {
+  // B1 print task: SetPageSize (0x13) with 6 bytes [rows(u16), cols(u16), copies(u16)]
+  return encodePacket(NiimbotCommand.SET_PAGE_SIZE, [
+    (rows >> 8) & 0xff, rows & 0xff,
+    (cols >> 8) & 0xff, cols & 0xff,
+    (copies >> 8) & 0xff, copies & 0xff,
   ]);
 }
 
@@ -268,14 +273,21 @@ export function buildGetPrintStatus(): Buffer {
  * The row data is packed 1-bit (8 pixels per byte, MSB first).
  * Black = 1, White = 0.
  *
- * Niimbot B1/B21 image packet format:
- *   [rowIndex_hi, rowIndex_lo, repeatCount_hi, repeatCount_lo, ...rowData]
- * repeatCount=1 for single unique lines.
+ * PrintBitmapRow (0x85) format:
+ *   [rowIndex(u16), blackPixelCount(3B), repeatCount(u8), ...rowData]
+ * blackPixelCount can be all zeros (printer handles it fine).
+ * repeatCount=1 means draw the row once.
  */
 export function buildImageRow(rowIndex: number, rowData: Buffer): Buffer {
-  const payload = Buffer.alloc(4 + rowData.length);
+  // 6-byte header: row(2) + blackPixelCount(3) + repeatCount(1)
+  const payload = Buffer.alloc(6 + rowData.length);
   payload.writeUInt16BE(rowIndex, 0);
-  payload.writeUInt16BE(1, 2);  // repeat count = 1
-  rowData.copy(payload, 4);
+  // Black pixel count: [0, 0, 0] — printer accepts zeros
+  payload[2] = 0x00;
+  payload[3] = 0x00;
+  payload[4] = 0x00;
+  // Repeat count: 1
+  payload[5] = 0x01;
+  rowData.copy(payload, 6);
   return encodePacket(NiimbotCommand.IMAGE_DATA, payload);
 }
