@@ -181,9 +181,9 @@ export class NiimbotService {
         console.log(`[Niimbot] Port ${portPath} opened.`);
 
         try {
-          // Wait for the BT SPP link to fully establish.
-          // USB is near-instant, but Bluetooth virtual COM takes 2-3s.
-          await new Promise(r => setTimeout(r, 2000));
+          // Small settle delay after port open.
+          // USB is near-instant; BT SPP may need 2-3s but B1 uses USB serial.
+          await new Promise(r => setTimeout(r, 200));
 
           const connectPkt = buildConnect();
           console.log(`[Niimbot] Sending CONNECT: ${connectPkt.toString('hex')}`);
@@ -598,15 +598,15 @@ export class NiimbotService {
         }
         if (status === 0) {
           // Still printing — wait and poll again
-          await new Promise(r => setTimeout(r, 100));
+          await new Promise(r => setTimeout(r, 50));
           continue;
         }
-        // Unknown status — wait longer and retry
-        await new Promise(r => setTimeout(r, 300));
+        // Unknown status — retry quickly
+        await new Promise(r => setTimeout(r, 100));
       } catch (err: any) {
         console.warn(`[Niimbot] Print status poll error: ${err.message}`);
         // Timeout on individual poll — retry
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 100));
       }
     }
     console.warn(`[Niimbot] Print status poll timeout after ${polls} polls — continuing anyway`);
@@ -630,8 +630,9 @@ export class NiimbotService {
         if (writeErr) { reject(writeErr); return; }
         this.port!.drain((drainErr) => {
           if (drainErr) { reject(drainErr); return; }
-          // Small pacing delay to avoid overflowing the printer buffer over BT
-          setTimeout(resolve, 20);
+          // Small pacing delay — printer firmware needs time to process each row.
+          // 5ms is enough for USB (was 20ms for BT safety).
+          setTimeout(resolve, 5);
         });
       });
     });

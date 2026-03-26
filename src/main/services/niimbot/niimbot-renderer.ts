@@ -17,6 +17,7 @@ import { NiimbotModelSpec, DEFAULT_MODEL } from './niimbot-protocol';
 export interface LabelContent {
   // Product
   productName: string;
+  productDescription?: string; // Free-form description (generic/custom products)
   variant?: string;           // "Taille M / Rouge"
   sku?: string;
   price?: string;             // "29.99€"
@@ -271,10 +272,12 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     if (c.orderId) est += bs * 7 + 3;
     est += 4; // separator
     est += ns * 7 + 3; // product name
+    if (c.productDescription) est += bs * 7 + 3;
     if (c.variant) est += bs * 7 + 3;
     if (c.sku) est += bs * 7 + 3;
     est += 4; // separator
-    if (c.customerName || c.socialHandle) est += bs * 7 + 3;
+    if (c.socialHandle) est += ns * 7 + 3;
+    if (c.customerName) est += ns * 7 + 3;
     if (c.country) est += bs * 7 + 3;
     return est;
   };
@@ -308,6 +311,11 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   // Product name (largest scale)
   lines.push({ text: truncate(c.productName, maxCharsN), scale: nameScale, bold: true });
 
+  // Product description (free-form, 1 line truncated)
+  if (c.productDescription) {
+    lines.push({ text: truncate(c.productDescription, maxCharsB), scale: bodyScale, bold: false });
+  }
+
   // Variant
   if (c.variant) {
     lines.push({ text: truncate(c.variant, maxCharsB), scale: bodyScale, bold: false });
@@ -320,12 +328,12 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
 
   lines.push({ text: '__SEP__', scale: 0, bold: false });
 
-  // Customer
+  // Customer — social handle + name at nameScale for readability
   if (c.socialHandle) {
-    lines.push({ text: truncate(c.socialHandle, maxCharsB), scale: bodyScale, bold: true });
+    lines.push({ text: truncate(c.socialHandle, maxCharsN), scale: nameScale, bold: true });
   }
   if (c.customerName) {
-    lines.push({ text: truncate(c.customerName, maxCharsB), scale: bodyScale, bold: false });
+    lines.push({ text: truncate(c.customerName, maxCharsN), scale: nameScale, bold: true });
   }
 
   // Country
@@ -438,6 +446,12 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
     y += 16;
   }
 
+  // Product description (free-form, 1 line truncated, scale 1)
+  if (c.productDescription) {
+    ctx.drawText(truncate(c.productDescription, maxChars1), m, y, 1);
+    y += 10;
+  }
+
   // Variant
   if (c.variant) {
     ctx.drawText(truncate(c.variant, maxChars1), m, y, 1);
@@ -455,21 +469,14 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
   ctx.hLine(m, y, textW, 1);
   y += 4;
 
-  // Customer info
+  // Customer info (scale 2 for social handle + name for readability)
   if (c.socialHandle) {
-    ctx.drawTextBold(truncate(c.socialHandle, maxChars1), m, y, 1);
-    const handleW = c.socialHandle.length * 6 + 6;
-    if (c.customerName && handleW + c.customerName.length * 6 < textW) {
-      ctx.drawText(c.customerName, m + handleW, y, 1);
-    }
-    y += 10;
-    if (c.customerName && handleW + (c.customerName?.length || 0) * 6 >= textW) {
-      ctx.drawText(truncate(c.customerName, maxChars1), m, y, 1);
-      y += 10;
-    }
-  } else if (c.customerName) {
-    ctx.drawTextBold(truncate(c.customerName, maxChars1), m, y, 1);
-    y += 10;
+    ctx.drawTextBold(truncate(c.socialHandle, maxChars2), m, y, 2);
+    y += 18;
+  }
+  if (c.customerName) {
+    ctx.drawTextBold(truncate(c.customerName, maxChars2), m, y, 2);
+    y += 18;
   }
 
   if (c.country) {
@@ -558,6 +565,12 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
 
   y += 4;
 
+  // Product description (free-form, 1 line truncated, scale 2)
+  if (c.productDescription) {
+    ctx.drawText(truncate(c.productDescription, maxChars2), m, y, 2);
+    y += 18;
+  }
+
   // Variant (scale 2)
   if (c.variant) {
     ctx.drawText(truncate(c.variant, maxChars2), m, y, 2);
@@ -574,14 +587,14 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   ctx.hLine(m, y, textW, 1);
   y += 6;
 
-  // Customer section
+  // Customer section (scale 2 for handle + name for live sales readability)
   if (c.socialHandle) {
     ctx.drawTextBold(truncate(c.socialHandle, maxChars2), m, y, 2);
     y += 18;
   }
   if (c.customerName) {
-    ctx.drawText(truncate(c.customerName, maxChars1), m, y, 1);
-    y += 12;
+    ctx.drawTextBold(truncate(c.customerName, maxChars2), m, y, 2);
+    y += 18;
   }
   if (c.country) {
     ctx.drawText(c.country, m, y, 1);

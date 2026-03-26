@@ -6,6 +6,7 @@ import { DEFAULT_MODEL, NIIMBOT_MODELS, NiimbotModelSpec } from './niimbot/niimb
 /** Shared mock content used for test prints and preview — must produce identical output */
 const MOCK_LABEL_CONTENT: LabelContent = {
   productName: 'Nom du produit',
+  productDescription: 'Bracelet perles naturelles taille L',
   variant: 'Variante / Couleur',
   sku: 'REF-001-ABC',
   price: '29,90 \u20ac',
@@ -17,7 +18,7 @@ const MOCK_LABEL_CONTENT: LabelContent = {
   orderTotal: '89,70 \u20ac',
   quantityFraction: '1/3',
   customerName: 'Jean Dupont',
-  socialHandle: '@jean.dupont',
+  socialHandle: '@jeandup_live',
   country: 'France',
   qrCodeUrl: 'https://hou.la/abc123',
   websiteUrl: 'www.maboutique.com',
@@ -277,14 +278,17 @@ export class PrinterService {
     console.log(`[Printer] testPrintNiimbot: port=${portPath}, printerName=${printerName}`);
 
     try {
-      // Disconnect any existing connection first to avoid "Access denied"
-      if (this.niimbot.isConnected()) {
-        console.log('[Printer] Disconnecting previous Niimbot session...');
-        await this.niimbot.disconnect();
+      // Reuse existing connection if already connected to the same port
+      if (this.niimbot.isConnected() && this.connectedNiimbotPort === portPath) {
+        console.log('[Printer] Reusing existing Niimbot connection.');
+      } else {
+        if (this.niimbot.isConnected()) {
+          console.log('[Printer] Disconnecting previous Niimbot session...');
+          await this.niimbot.disconnect();
+        }
+        await this.niimbot.connect(portPath);
+        this.connectedNiimbotPort = portPath;
       }
-
-      await this.niimbot.connect(portPath);
-      this.connectedNiimbotPort = portPath;
       console.log('[Printer] Niimbot connected, detecting label + printing mock...');
 
       // Detect label size via RFID
