@@ -3,7 +3,7 @@
 export type PrintJobType = 'product_label' | 'order_summary' | 'invoice' | 'shipping_label' | 'packing_slip';
 export type PrintJobStatus = 'pending' | 'sent' | 'printed' | 'failed' | 'cancelled';
 export type PrintLabelFormat = 'zpl' | 'pdf' | 'escpos' | 'png' | 'niimbot';
-export type PrintLabelSize = '57x32' | '40x30' | '50x30' | '50x25' | '100x50' | '100x100' | '100x150';
+export type PrintLabelSize = '57x32' | '40x30' | '50x30' | '50x25' | '100x50' | '100x100' | '100x150' | (string & {});
 
 export const LABEL_SIZE_OPTIONS: { value: PrintLabelSize; label: string }[] = [
   { value: '57x32',   label: '57 × 32 mm — Standard' },

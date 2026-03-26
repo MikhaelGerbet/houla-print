@@ -371,7 +371,7 @@ export class PrinterService {
    * Generate a label preview as a base64-encoded BMP string.
    * Renders a mock product label at the given size and returns a data URI.
    */
-  generatePreviewBase64(labelSize: import('../../shared/types').PrintLabelSize): string {
+  generatePreviewBase64(labelSize: string): string {
     const label = renderProductLabel(MOCK_LABEL_CONTENT, labelSize, DEFAULT_MODEL);
     return bitmapToBmpBase64(label.bitmap, label.widthDots, label.heightDots);
   }

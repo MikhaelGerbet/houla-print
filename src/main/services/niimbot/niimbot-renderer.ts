@@ -51,7 +51,7 @@ export interface RenderedLabel {
  */
 export function renderProductLabel(
   content: LabelContent,
-  labelSize: PrintLabelSize,
+  labelSize: string,
   model: NiimbotModelSpec = DEFAULT_MODEL,
 ): RenderedLabel {
   const dims = getLabelDimensions(labelSize, model.dpi);
@@ -84,7 +84,7 @@ interface LabelDims {
   heightMm: number;
 }
 
-function getLabelDimensions(size: PrintLabelSize, dpi: number): LabelDims {
+function getLabelDimensions(size: string, dpi: number): LabelDims {
   const dotsPerMm = dpi / 25.4;
   const [wMm, hMm] = size.split('x').map(Number);
   return {
@@ -235,82 +235,152 @@ class BitmapCanvas {
 // ═══════════════════════════════════════════════════════
 
 /**
- * Small labels (h ≤ 30mm): compact layout with QR code on right.
- * Optimized to fill available space: header row, product info, bottom price bar.
+ * Small labels (h ≤ 30mm): adaptive layout with readable text sizes.
+ * All text scale ≥ 2 (1.75mm at 203 DPI). Product name and price scale 3 when space allows.
+ * QR code top-right, content distributed proportionally, price bar at bottom.
  */
 function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: number): void {
-  const m = 4; // tight margin for small labels
+  const m = 6;
   const fullW = w - m * 2;
 
-  // QR code on the right (small module for compact labels)
+  // ---- QR code layout (top-right corner) ----
   let qrSize = 0;
   let textW = fullW;
   if (c.qrCodeUrl && w >= 200) {
-    const modSize = 2;
+    const modSize = h >= 200 ? 3 : 2;
     qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, modSize);
-    // Place QR vertically centered on the right
     const qrX = w - m - qrSize;
-    const qrY = Math.max(m, Math.floor((h - qrSize) / 2));
-    ctx.drawQrCode(c.qrCodeUrl, qrX, qrY, modSize);
-    textW = qrX - m - 4; // leave small gap
+    ctx.drawQrCode(c.qrCodeUrl, qrX, m, modSize);
+    textW = qrX - m - 6;
   }
 
-  const maxChars2 = Math.floor(textW / 12);
-  const maxChars1 = Math.floor(textW / 6);
-  let y = m;
+  // ---- Determine scale based on available height ----
+  // Price bar: scale 3 price = 21px + 6px margin = 27
+  const priceScale = h >= 180 ? 3 : 2;
+  const priceBarH = priceScale * 7 + 6;
+  const availH = h - m * 2 - priceBarH;
 
-  // Row 1: Order info (orderId + date) — scale 1, bold
+  // Adaptive text scales: try scale 2 for body, scale 3 for product name
+  // Fall back to scale 2 everywhere if tight, or scale 1 if very tight
+  let bodyScale = 2;
+  let nameScale = h >= 180 ? 3 : 2;
+
+  // Estimate total content height to check if it fits
+  const estimateH = (ns: number, bs: number): number => {
+    let est = 0;
+    if (c.orderId) est += bs * 7 + 3;
+    est += 4; // separator
+    est += ns * 7 + 3; // product name
+    if (c.variant) est += bs * 7 + 3;
+    if (c.sku) est += bs * 7 + 3;
+    est += 4; // separator
+    if (c.customerName || c.socialHandle) est += bs * 7 + 3;
+    if (c.country) est += bs * 7 + 3;
+    return est;
+  };
+
+  // Scale down if content doesn't fit
+  if (estimateH(nameScale, bodyScale) > availH) {
+    nameScale = 2;
+  }
+  if (estimateH(nameScale, bodyScale) > availH) {
+    bodyScale = 1;
+  }
+  if (estimateH(nameScale, bodyScale) > availH) {
+    nameScale = 1;
+  }
+
+  const maxCharsN = Math.floor(textW / (6 * nameScale));
+  const maxCharsB = Math.floor(textW / (6 * bodyScale));
+
+  // ---- Build content lines ----
+  const lines: { text: string; scale: number; bold: boolean }[] = [];
+
+  // Order info
   if (c.orderId) {
     let orderStr = c.orderId;
     if (c.orderDate) orderStr += '  ' + c.orderDate;
-    ctx.drawTextBold(truncate(orderStr, maxChars1), m, y, 1);
-    y += 10;
+    lines.push({ text: truncate(orderStr, maxCharsB), scale: bodyScale, bold: true });
   }
 
-  // Product name (bold, scale 2)
-  ctx.drawTextBold(truncate(c.productName, maxChars2), m, y, 2);
-  y += 16;
+  lines.push({ text: '__SEP__', scale: 0, bold: false });
 
-  // Variant (scale 1)
+  // Product name (largest scale)
+  lines.push({ text: truncate(c.productName, maxCharsN), scale: nameScale, bold: true });
+
+  // Variant
   if (c.variant) {
-    ctx.drawText(truncate(c.variant, maxChars1), m, y, 1);
-    y += 9;
+    lines.push({ text: truncate(c.variant, maxCharsB), scale: bodyScale, bold: false });
   }
 
-  // SKU (scale 1)
+  // SKU
   if (c.sku) {
-    ctx.drawText(truncate('REF: ' + c.sku, maxChars1), m, y, 1);
-    y += 9;
+    lines.push({ text: truncate('REF: ' + c.sku, maxCharsB), scale: bodyScale, bold: false });
   }
 
-  // Separator
-  ctx.hLine(m, y, textW, 1);
-  y += 3;
+  lines.push({ text: '__SEP__', scale: 0, bold: false });
 
-  // Customer line
+  // Customer
+  if (c.socialHandle) {
+    lines.push({ text: truncate(c.socialHandle, maxCharsB), scale: bodyScale, bold: true });
+  }
   if (c.customerName) {
-    let custLine = c.customerName;
-    if (c.socialHandle) custLine = c.socialHandle + ' ' + custLine;
-    ctx.drawText(truncate(custLine, maxChars1), m, y, 1);
-    y += 9;
-  } else if (c.socialHandle) {
-    ctx.drawText(truncate(c.socialHandle, maxChars1), m, y, 1);
-    y += 9;
+    lines.push({ text: truncate(c.customerName, maxCharsB), scale: bodyScale, bold: false });
   }
 
-  // Bottom bar: price (right, scale 2 bold) + quantity (left, scale 1)
-  const bottomY = h - m - 14;
-  if (c.price) {
-    if (c.originalPrice && c.originalPrice !== c.price) {
-      ctx.drawTextStrikethrough(c.originalPrice, m, bottomY + 4, 1);
-      const origW = c.originalPrice.length * 6 + 4;
-      ctx.drawTextBoldRight(c.price, m + textW, bottomY, 2);
+  // Country
+  if (c.country) {
+    lines.push({ text: c.country, scale: bodyScale, bold: false });
+  }
+
+  // ---- Calculate total content height and distribute gaps ----
+  const lineHeights = lines.map(l => {
+    if (l.text === '__SEP__') return 4;
+    return l.scale * 7 + 3;
+  });
+  const totalContentH = lineHeights.reduce((a, b) => a + b, 0);
+
+  const extraSpace = Math.max(0, availH - totalContentH);
+  const sectionCount = lines.filter(l => l.text === '__SEP__').length + 1;
+  const sectionGap = Math.floor(extraSpace / Math.max(sectionCount, 1));
+
+  // ---- Render content lines ----
+  let y = m;
+  for (const line of lines) {
+    if (line.text === '__SEP__') {
+      y += Math.floor(sectionGap / 2);
+      ctx.hLine(m, y, textW, 1);
+      y += 4 + Math.floor(sectionGap / 2);
+      continue;
+    }
+    if (line.bold) {
+      ctx.drawTextBold(line.text, m, y, line.scale);
     } else {
-      ctx.drawTextBoldRight(c.price, m + textW, bottomY, 2);
+      ctx.drawText(line.text, m, y, line.scale);
+    }
+    y += line.scale * 7 + 3;
+  }
+
+  // ---- Bottom bar: price (right-aligned, grouped) + quantity (left) ----
+  const bottomY = h - m - priceBarH;
+  ctx.hLine(m, bottomY - 2, fullW, 1);
+
+  if (c.price) {
+    const pw = c.price.length * 6 * priceScale;
+    const px = m + fullW - pw;
+    ctx.drawTextBold(c.price, px, bottomY + 2, priceScale);
+
+    // Strikethrough original price, scale bodyScale, just left of main price
+    if (c.originalPrice && c.originalPrice !== c.price) {
+      const origW = c.originalPrice.length * 6 * bodyScale + 6;
+      const origY = bottomY + 2 + Math.floor((priceScale * 7 - bodyScale * 7) / 2);
+      ctx.drawTextStrikethrough(c.originalPrice, px - origW, origY, bodyScale);
     }
   }
+
   if (c.quantityFraction) {
-    ctx.drawText(c.quantityFraction, m, bottomY + 4, 1);
+    const qtyY = bottomY + 2 + Math.floor((priceScale * 7 - bodyScale * 7) / 2);
+    ctx.drawText(c.quantityFraction, m, qtyY, bodyScale);
   }
 }
 
@@ -410,19 +480,20 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
   // Bottom section: price
   const bottomY = h - m;
 
-  // Price line (bold, scale 2, bottom-right of text area)
+  // Price line (bold, scale 2, right-aligned with strikethrough just left of it)
   if (c.price) {
     const priceY = bottomY - 16;
-    // Strikethrough original price if different
+    const priceW = c.price.length * 12; // scale 2 = 12px per char
+    const priceX = m + textW - priceW;
+    ctx.drawTextBold(c.price, priceX, priceY, 2);
+
+    // Strikethrough original price just left of the real price
     if (c.originalPrice && c.originalPrice !== c.price) {
-      ctx.drawTextStrikethrough(c.originalPrice, m, priceY + 2, 1);
-      const origW = c.originalPrice.length * 6 + 8;
-      ctx.drawTextBold(c.price, m + origW, priceY, 2);
-    } else {
-      ctx.drawTextBold(c.price, m, priceY, 2);
+      const origW = c.originalPrice.length * 6 + 6;
+      ctx.drawTextStrikethrough(c.originalPrice, priceX - origW, priceY + 4, 1);
     }
 
-    // Quantity fraction next to price
+    // Quantity fraction at left
     if (c.quantityFraction) {
       ctx.drawTextRight(c.quantityFraction, m + textW, priceY + 4, 1);
     }

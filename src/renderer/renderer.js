@@ -53,12 +53,23 @@ const PRINTER_TYPE_ICONS = {
 
 const LABEL_SIZE_OPTIONS = [
   { value: '57x32',   label: '57 × 32 mm — Standard' },
+  { value: '50x30',   label: '50 × 30 mm — Niimbot standard' },
   { value: '40x30',   label: '40 × 30 mm — Petit (bijoux)' },
   { value: '50x25',   label: '50 × 25 mm — Compact' },
   { value: '100x50',  label: '100 × 50 mm — Moyen' },
   { value: '100x100', label: '100 × 100 mm — Grand carré' },
   { value: '100x150', label: '100 × 150 mm — Expédition (6×4")' },
 ];
+
+/** Build <option> HTML, including a dynamic custom size if needed */
+function buildSizeOptions(extraSize) {
+  let opts = LABEL_SIZE_OPTIONS;
+  if (extraSize && !opts.find(o => o.value === extraSize)) {
+    const [ww, hh] = extraSize.split('x');
+    opts = [...opts, { value: extraSize, label: ww + ' × ' + hh + ' mm — Détecté (RFID)' }];
+  }
+  return opts.map(o => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+}
 
 // ═══════════════════════════════════════════════════════
 // State management
@@ -191,7 +202,7 @@ function renderPrinters(printers) {
       ? `<span class="badge badge-detected">${fmt.widthMm}×${fmt.heightMm}mm</span>`
       : '';
     const detectBtn = p.type === 'niimbot'
-      ? `<button class="btn btn-sm btn-ghost btn-detect" data-detect-printer="${escapeAttr(p.name)}"><span class="btn-detect-label">Détecter</span></button>`
+      ? `<button class="btn btn-sm btn-ghost btn-detect" data-detect-printer="${escapeAttr(p.name)}" title="Détecter automatiquement le format d'étiquette chargée dans l'imprimante"><span class="btn-detect-label">Détecter étiquette</span></button>`
       : '';
     return `
     <div class="card">
@@ -265,7 +276,7 @@ function renderPrinters(printers) {
 
       btn.disabled = true;
       btn.classList.add('btn-test-loading');
-      if (labelSpan) labelSpan.textContent = 'Détection…';
+      if (labelSpan) labelSpan.textContent = 'Lecture RFID…';
 
       try {
         const result = await api.detectLabel(name);
@@ -274,24 +285,27 @@ function renderPrinters(printers) {
         if (result.success && result.detectedLabel) {
           btn.classList.add('btn-test-success');
           const dl = result.detectedLabel;
-          if (labelSpan) labelSpan.textContent = '✓ ' + dl.widthMm + '×' + dl.heightMm + 'mm';
+          if (labelSpan) labelSpan.textContent = '✓ ' + dl.widthMm + ' × ' + dl.heightMm + ' mm';
           const sizeStr = dl.widthMm + 'x' + dl.heightMm;
           updateDetectedLabelSize(sizeStr, dl);
+          showDetectNotification(true, dl);
         } else {
           btn.classList.add('btn-test-error');
-          if (labelSpan) labelSpan.textContent = '✕ ' + (result.error || 'Non détecté');
+          if (labelSpan) labelSpan.textContent = '✕ Échec';
+          showDetectNotification(false, null, result.error || 'Aucune étiquette détectée. Vérifiez que des étiquettes sont chargées dans l\'imprimante.');
         }
       } catch (err) {
         btn.classList.remove('btn-test-loading');
         btn.classList.add('btn-test-error');
-        if (labelSpan) labelSpan.textContent = '✕ ' + (err.message || 'Erreur');
+        if (labelSpan) labelSpan.textContent = '✕ Erreur';
+        showDetectNotification(false, null, err.message || 'Impossible de communiquer avec l\'imprimante.');
       }
 
       setTimeout(() => {
         btn.disabled = false;
         btn.classList.remove('btn-test-success', 'btn-test-error');
-        if (labelSpan) labelSpan.textContent = 'Détecter';
-      }, 4000);
+        if (labelSpan) labelSpan.textContent = 'Détecter étiquette';
+      }, 5000);
     });
   });
 }
@@ -368,9 +382,11 @@ function renderLabelSizes(workspaces) {
       </div>`
     : '';
 
-  const sizeOptions = LABEL_SIZE_OPTIONS
-    .map(o => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`)
-    .join('');
+  // Determine if we need a dynamic size (detected or from saved config)
+  const detectedSize = detectedFmt ? detectedFmt.widthMm + 'x' + detectedFmt.heightMm : null;
+  const configSizes = shopWorkspaces.map(ws => ws.config?.productLabelSize).filter(Boolean);
+  const extraSize = detectedSize || configSizes.find(s => !LABEL_SIZE_OPTIONS.find(o => o.value === s)) || null;
+  const sizeOptions = buildSizeOptions(extraSize);
 
   $labelSizeList.innerHTML = detectedInfo + shopWorkspaces.map(ws => {
     const currentSize = ws.config?.productLabelSize || '57x32';
@@ -465,9 +481,71 @@ function updateDetectedLabelSize(sizeStr, detectedLabel) {
     }
     loadLabelPreview(sizeStr);
   });
+
+  // Update the detected format badge in renderLabelSizes section
+  const existingBadge = $labelSizeList.querySelector('.detected-format-info');
+  const newBadge = `<div class="detected-format-info">
+    <span class="badge badge-detected">📡 Format détecté : ${detectedLabel.widthMm} × ${detectedLabel.heightMm} mm</span>
+  </div>`;
+  if (existingBadge) {
+    existingBadge.outerHTML = newBadge;
+  } else {
+    $labelSizeList.insertAdjacentHTML('afterbegin', newBadge);
+  }
   console.log('[Renderer] Label size updated from RFID: ' + sizeStr);
 }
 
+/**
+ * Show a notification in the printer section after detection.
+ * Success: explains what was detected and that the user can change it.
+ * Error: tells the user what went wrong.
+ */
+function showDetectNotification(success, detectedLabel, errorMsg) {
+  // Remove any previous notification
+  const existing = document.querySelector('.detect-notification');
+  if (existing) existing.remove();
+
+  let html;
+  if (success && detectedLabel) {
+    html = `
+      <div class="detect-notification detect-success">
+        <span class="detect-notification-icon">✅</span>
+        <div class="detect-notification-body">
+          <div class="detect-notification-title">Détection réussie !</div>
+          Votre imprimante contient des étiquettes de <strong>${detectedLabel.widthMm} × ${detectedLabel.heightMm} mm</strong>.
+          Le format a été appliqué automatiquement.
+          <div class="detect-notification-hint">Si ce n'est pas le bon format, vous pouvez le modifier manuellement dans la liste ci-dessous.</div>
+        </div>
+      </div>`;
+  } else {
+    html = `
+      <div class="detect-notification detect-error">
+        <span class="detect-notification-icon">⚠️</span>
+        <div class="detect-notification-body">
+          <div class="detect-notification-title">Détection échouée</div>
+          ${escapeHtml(errorMsg || 'Impossible de détecter le format d\'étiquette.')}
+          <div class="detect-notification-hint">Vous pouvez sélectionner le format manuellement dans la liste ci-dessous.</div>
+        </div>
+      </div>`;
+  }
+
+  // Insert notification near the label size section
+  if ($labelSizeList) {
+    $labelSizeList.insertAdjacentHTML('beforebegin', html);
+  } else if ($printerList) {
+    $printerList.insertAdjacentHTML('afterend', html);
+  }
+
+  // Auto-dismiss after 15 seconds
+  setTimeout(() => {
+    const notif = document.querySelector('.detect-notification');
+    if (notif) {
+      notif.style.opacity = '0';
+      notif.style.transition = 'opacity 0.3s ease';
+      setTimeout(() => notif.remove(), 300);
+    }
+  }, 15000);
+}
 
 
 document.querySelectorAll('.tab').forEach(tab => {

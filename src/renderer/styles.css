@@ -265,7 +265,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 8px 16px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   font-size: 12px;
@@ -273,7 +273,7 @@ body {
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 11;
 }
 
 .status-dot {
@@ -308,7 +308,7 @@ body {
   padding: 0 16px;
   flex-shrink: 0;
   position: sticky;
-  top: 38px; /* height of status-bar */
+  top: 33px; /* height of status-bar (8+8+12+1 border) */
   z-index: 10;
   background: var(--bg-card);
 }
@@ -369,6 +369,13 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.section-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
   margin-bottom: 10px;
 }
 
@@ -657,6 +664,57 @@ body {
   margin-right: 4px;
   border-color: var(--primary);
   color: var(--primary);
+}
+
+/* Detection result notification */
+.detect-notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 8px;
+  animation: fadeInSlide 0.3s ease;
+}
+
+.detect-notification.detect-success {
+  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid rgba(22, 163, 74, 0.25);
+  color: #15803d;
+}
+
+.detect-notification.detect-error {
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  color: #dc2626;
+}
+
+.detect-notification-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.detect-notification-body {
+  flex: 1;
+}
+
+.detect-notification-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.detect-notification-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@keyframes fadeInSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .btn-test:disabled {

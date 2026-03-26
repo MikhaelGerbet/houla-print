@@ -10,7 +10,7 @@
     "dev": "node scripts/dev.js",
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && node scripts/copy-renderer.js",
     "generate-icons": "node scripts/generate-icons.js",
-    "start": "electron dist/main/index.js",
+    "start": "taskkill /F /IM electron.exe 2>nul & electron dist/main/index.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
