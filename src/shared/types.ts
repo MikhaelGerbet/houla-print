@@ -118,6 +118,8 @@ export const IPC = {
   PRINTER_LIST: 'printer:list',
   PRINTER_ASSIGN: 'printer:assign',
   PRINTER_TEST: 'printer:test',
+  PRINTER_PROBE: 'printer:probe',
+  PRINTER_PREVIEW: 'printer:preview',
 
   // Print queue
   QUEUE_STATS: 'queue:stats',

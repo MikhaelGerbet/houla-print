@@ -557,3 +557,74 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ═══════════════════════════════════════════════════════
+   Label Preview
+   ═══════════════════════════════════════════════════════ */
+
+.label-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.label-preview-img-wrap {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.label-preview-img-wrap img {
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;  /* keep crisp 1-bit bitmap look */
+}
+
+.label-preview-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ═══════════════════════════════════════════════════════
+   Test Button States
+   ═══════════════════════════════════════════════════════ */
+
+.btn-test {
+  min-width: 56px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.btn-test:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.btn-test-loading {
+  background: var(--bg-hover) !important;
+}
+
+.btn-test-success {
+  background: #16a34a !important;
+  color: #fff !important;
+  border-color: #16a34a !important;
+}
+
+.btn-test-error {
+  background: #dc2626 !important;
+  color: #fff !important;
+  border-color: #dc2626 !important;
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

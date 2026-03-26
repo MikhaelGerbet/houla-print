@@ -50,10 +50,10 @@ export class PrinterService {
         if (!alreadyListed) {
           osPrinters.push({
             name: `niimbot:${dev.port}`,
-            displayName: `Niimbot (${dev.port})${dev.friendlyName ? ' — ' + dev.friendlyName : ''}`,
+            displayName: dev.modelName || 'Niimbot',
             isDefault: false,
             status: 0,
-            description: `Niimbot via ${dev.port}`,
+            description: dev.port,
             type: 'niimbot',
           });
         }
@@ -72,10 +72,10 @@ export class PrinterService {
           // Show COM ports that have a manufacturer (likely real devices, not internal)
           osPrinters.push({
             name: `niimbot:${p.port}`,
-            displayName: `${p.manufacturer || 'Serial'} (${p.port})`,
+            displayName: 'Niimbot',
             isDefault: false,
             status: 0,
-            description: `Serial port ${p.port} — ${p.manufacturer || 'unknown'}`,
+            description: p.port,
             type: 'niimbot',
           });
         }
@@ -244,14 +244,28 @@ export class PrinterService {
    */
   private async testPrintNiimbot(printerName: string): Promise<{ success: boolean; error?: string }> {
     const portPath = this.extractNiimbotPort(printerName);
+    console.log(`[Printer] testPrintNiimbot: port=${portPath}, printerName=${printerName}`);
 
     try {
+      // Disconnect any existing connection first to avoid "Access denied"
+      if (this.niimbot.isConnected()) {
+        console.log('[Printer] Disconnecting previous Niimbot session...');
+        await this.niimbot.disconnect();
+      }
+
       await this.niimbot.connect(portPath);
       this.connectedNiimbotPort = portPath;
+      console.log('[Printer] Niimbot connected, sending test print...');
       const result = await this.niimbot.testPrint();
+      console.log(`[Printer] Test print result: success=${result.success}, error=${result.error || 'none'}`);
       return result;
     } catch (err: any) {
+      console.error(`[Printer] testPrintNiimbot failed:`, err.message);
       return { success: false, error: err.message || String(err) };
+    } finally {
+      // Always disconnect after test print to release the port
+      try { await this.niimbot.disconnect(); } catch { /* ignore */ }
+      this.connectedNiimbotPort = null;
     }
   }
 
@@ -260,6 +274,37 @@ export class PrinterService {
    */
   getNiimbotService(): NiimbotService {
     return this.niimbot;
+  }
+
+  /**
+   * Probe a Niimbot printer to read its model name / print head width.
+   */
+  async probePrinter(printerName: string): Promise<{ modelName: string; widthDots: number } | null> {
+    const portPath = this.extractNiimbotPort(printerName);
+    try {
+      return await this.niimbot.probeModel(portPath);
+    } catch (err) {
+      console.warn('[Printer] Probe failed for', printerName, (err as Error).message);
+      return null;
+    }
+  }
+
+  /**
+   * Generate a label preview as a base64-encoded BMP string.
+   * Renders a mock product label at the given size and returns a data URI.
+   */
+  generatePreviewBase64(labelSize: import('../../shared/types').PrintLabelSize): string {
+    const mockContent: LabelContent = {
+      productName: 'Exemple produit',
+      price: '12,50 €',
+      barcode: '3760001234567',
+      brandName: 'Ma Boutique',
+      sku: 'SKU-001',
+      variant: 'Taille M / Bleu',
+    };
+
+    const label = renderProductLabel(mockContent, labelSize, DEFAULT_MODEL);
+    return bitmapToBmpBase64(label.bitmap, label.widthDots, label.heightDots);
   }
 
   /**
@@ -324,4 +369,59 @@ export class PrinterService {
       await fs.unlink(tmpFile).catch(() => {});
     }
   }
+}
+
+// ═══════════════════════════════════════════════════════
+// BMP encoder — converts 1-bit packed bitmap to BMP base64 data URI
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Convert a 1-bit packed bitmap (MSB first) to a Windows BMP base64 data URI.
+ * BMP stores rows bottom-to-top and pads each row to 4-byte boundary.
+ */
+function bitmapToBmpBase64(bitmap: Buffer, width: number, height: number): string {
+  const srcBytesPerRow = Math.ceil(width / 8);
+  const bmpBytesPerRow = Math.ceil(width / 8);
+  const bmpPaddedRow = (bmpBytesPerRow + 3) & ~3; // pad to 4-byte boundary
+  const pixelDataSize = bmpPaddedRow * height;
+
+  // BMP file: 14 (file header) + 40 (info header) + 8 (color table: 2 entries) + pixel data
+  const headerSize = 14 + 40 + 8;
+  const fileSize = headerSize + pixelDataSize;
+  const buf = Buffer.alloc(fileSize, 0);
+
+  // -- File Header (14 bytes) --
+  buf.write('BM', 0);                                   // signature
+  buf.writeUInt32LE(fileSize, 2);                        // file size
+  buf.writeUInt32LE(0, 6);                               // reserved
+  buf.writeUInt32LE(headerSize, 10);                     // pixel data offset
+
+  // -- Info Header (40 bytes, BITMAPINFOHEADER) --
+  buf.writeUInt32LE(40, 14);                             // header size
+  buf.writeInt32LE(width, 18);                           // width
+  buf.writeInt32LE(height, 22);                          // height (positive = bottom-up)
+  buf.writeUInt16LE(1, 26);                              // planes
+  buf.writeUInt16LE(1, 28);                              // bits per pixel
+  buf.writeUInt32LE(0, 30);                              // compression (none)
+  buf.writeUInt32LE(pixelDataSize, 34);                  // image size
+  buf.writeInt32LE(3937, 38);                            // X pixels/meter (~100 DPI)
+  buf.writeInt32LE(3937, 42);                            // Y pixels/meter
+  buf.writeUInt32LE(2, 46);                              // colors used
+  buf.writeUInt32LE(2, 50);                              // important colors
+
+  // -- Color table (2 entries × 4 bytes) --
+  // Index 0 = white (background), Index 1 = black (foreground)
+  // In BMP 1-bit: bit=0 → palette[0], bit=1 → palette[1]
+  buf.writeUInt32LE(0x00FFFFFF, 54);                     // palette[0] = white (BGRA)
+  buf.writeUInt32LE(0x00000000, 58);                     // palette[1] = black (BGRA)
+
+  // -- Pixel data (bottom-up) --
+  for (let y = 0; y < height; y++) {
+    const srcRow = (height - 1 - y); // BMP is bottom-up
+    const srcOffset = srcRow * srcBytesPerRow;
+    const dstOffset = headerSize + y * bmpPaddedRow;
+    bitmap.copy(buf, dstOffset, srcOffset, srcOffset + srcBytesPerRow);
+  }
+
+  return 'data:image/bmp;base64,' + buf.toString('base64');
 }

@@ -28,6 +28,8 @@ const $workspaceList = document.getElementById('workspace-list');
 const $printerList = document.getElementById('printer-list');
 const $assignmentList = document.getElementById('assignment-list');
 const $labelSizeList = document.getElementById('label-size-list');
+const $labelPreviewSection = document.getElementById('section-label-preview');
+const $labelPreviewImg = document.getElementById('label-preview-img');
 const $errorBanner = document.getElementById('error-banner');
 const $errorText = document.getElementById('error-text');
 const $envBadge = document.getElementById('env-badge');
@@ -180,10 +182,12 @@ function renderPrinters(printers) {
       <div class="card-icon">${PRINTER_TYPE_ICONS[p.type] || '🖨️'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(p.displayName)}</div>
-        <div class="card-subtitle">${typeLabels[p.type] || p.type} ${p.isDefault ? '• par défaut' : ''}</div>
+        <div class="card-subtitle">${typeLabels[p.type] || p.type}${p.description ? ' • ' + escapeHtml(p.description) : ''} ${p.isDefault ? '• par défaut' : ''}</div>
       </div>
       <div class="card-action">
-        <button class="btn btn-sm btn-ghost" data-test-printer="${escapeAttr(p.name)}">Test</button>
+        <button class="btn btn-sm btn-ghost btn-test" data-test-printer="${escapeAttr(p.name)}">
+          <span class="btn-test-label">Test</span>
+        </button>
       </div>
     </div>
   `).join('');
@@ -191,11 +195,37 @@ function renderPrinters(printers) {
   // Bind test buttons
   $printerList.querySelectorAll('[data-test-printer]').forEach(el => {
     el.addEventListener('click', async (e) => {
-      const name = e.currentTarget.dataset.testPrinter;
-      e.currentTarget.textContent = '...';
-      const result = await api.testPrinter(name);
-      e.currentTarget.textContent = result.success ? '✓' : '✕';
-      setTimeout(() => { e.currentTarget.textContent = 'Test'; }, 2000);
+      const btn = e.currentTarget;
+      const name = btn.dataset.testPrinter;
+      const labelSpan = btn.querySelector('.btn-test-label');
+
+      // Disable button and show loading state
+      btn.disabled = true;
+      btn.classList.add('btn-test-loading');
+      if (labelSpan) labelSpan.textContent = 'Impression…';
+
+      try {
+        const result = await api.testPrinter(name);
+        btn.classList.remove('btn-test-loading');
+
+        if (result.success) {
+          btn.classList.add('btn-test-success');
+          if (labelSpan) labelSpan.textContent = '✓ OK';
+        } else {
+          btn.classList.add('btn-test-error');
+          if (labelSpan) labelSpan.textContent = '✕ ' + (result.error || 'Erreur');
+        }
+      } catch (err) {
+        btn.classList.remove('btn-test-loading');
+        btn.classList.add('btn-test-error');
+        if (labelSpan) labelSpan.textContent = '✕ ' + (err.message || 'Erreur');
+      }
+
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('btn-test-success', 'btn-test-error');
+        if (labelSpan) labelSpan.textContent = 'Test';
+      }, 4000);
     });
   });
 }
@@ -274,8 +304,32 @@ function renderLabelSizes(workspaces) {
 
     el.addEventListener('change', (e) => {
       api.updateWorkspaceConfig(wsId, { productLabelSize: e.target.value });
+      loadLabelPreview(e.target.value);
     });
   });
+
+  // Load initial preview with the first workspace's label size
+  const firstSize = shopWorkspaces[0]?.config?.productLabelSize || '57x32';
+  loadLabelPreview(firstSize);
+}
+
+/**
+ * Load and display a label preview for the given label size.
+ */
+async function loadLabelPreview(labelSize) {
+  if (!api || !$labelPreviewSection || !$labelPreviewImg) return;
+  try {
+    $labelPreviewSection.style.display = '';
+    $labelPreviewImg.alt = 'Chargement...';
+    const dataUri = await api.previewLabel(labelSize);
+    if (dataUri) {
+      $labelPreviewImg.src = dataUri;
+      $labelPreviewImg.alt = 'Aperçu étiquette ' + labelSize;
+    }
+  } catch (err) {
+    console.error('[Renderer] Preview error:', err);
+    $labelPreviewImg.alt = 'Erreur de chargement';
+  }
 }
 
 

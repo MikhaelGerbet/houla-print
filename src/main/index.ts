@@ -356,6 +356,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.PRINTER_TEST, async (_e, printerName: string) => {
     return printer.testPrint(printerName);
   });
+  ipcMain.handle(IPC.PRINTER_PROBE, async (_e, printerName: string) => {
+    return printer.probePrinter(printerName);
+  });
+  ipcMain.handle(IPC.PRINTER_PREVIEW, async (_e, labelSize: string) => {
+    return printer.generatePreviewBase64(labelSize as any);
+  });
 
   // Queue
   ipcMain.handle(IPC.QUEUE_STATS, () => queue.getStats());

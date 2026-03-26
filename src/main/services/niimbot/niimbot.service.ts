@@ -13,12 +13,14 @@ import {
   NiimbotLabelType,
   InfoCommand,
   NIIMBOT_PORT_PATTERNS,
+  NIIMBOT_MODELS,
   DEFAULT_MODEL,
   NiimbotModelSpec,
   encodePacket,
   decodePackets,
   buildConnect,
   buildGetInfo,
+  buildGetRfid,
   buildSetLabelType,
   buildSetDensity,
   buildStartPrint,
@@ -29,6 +31,7 @@ import {
   buildEndPagePrint,
   buildHeartbeat,
   buildImageRow,
+  buildGetPrintStatus,
 } from './niimbot-protocol';
 
 export interface NiimbotDeviceInfo {
@@ -38,6 +41,7 @@ export interface NiimbotDeviceInfo {
   vendorId?: string;
   productId?: string;
   friendlyName?: string;
+  modelName?: string;   // e.g. "Niimbot B1" — resolved after probing
 }
 
 export interface NiimbotPrintResult {
@@ -56,33 +60,223 @@ export class NiimbotService {
   private model: NiimbotModelSpec = DEFAULT_MODEL;
   private connected = false;
 
+  /** Mutex: true while a probe, connect, or print is actively using a serial port */
+  private busy = false;
+  /** Ports known to be dead (e.g. BT incoming port that always fails on write) */
+  private deadPorts = new Set<string>();
+
   /**
    * List all serial ports that could be Niimbot printers.
+   * For Bluetooth serial ports with no identifying name, actively probes
+   * with a quick CONNECT handshake to detect Niimbot devices.
    */
   async discover(): Promise<NiimbotDeviceInfo[]> {
     const ports = await SerialPort.list();
     const candidates: NiimbotDeviceInfo[] = [];
+    const bluetoothToProbe: NiimbotDeviceInfo[] = [];
 
+    console.log(`[Niimbot] Serial ports found: ${ports.length}`);
     for (const p of ports) {
       const portAny = p as any;
       const friendly = portAny.friendlyName || '';
       const combined = `${p.path} ${p.manufacturer || ''} ${friendly} ${p.pnpId || ''}`;
-      const isNiimbot = NIIMBOT_PORT_PATTERNS.some(pattern => pattern.test(combined))
-        || (p.vendorId && p.vendorId.toLowerCase() === '3513');
+      const matchesPattern = NIIMBOT_PORT_PATTERNS.some(pattern => pattern.test(combined));
+      const matchesVid = !!(p.vendorId && p.vendorId.toLowerCase() === '3513');
+      const isNiimbot = matchesPattern || matchesVid;
+      const isBluetooth = /bluetooth/i.test(friendly) || /bluetooth/i.test(p.manufacturer || '');
+
+      console.log(`[Niimbot]   ${p.path}: manufacturer=${p.manufacturer || '?'}, vid=${p.vendorId || '?'}, friendly=${friendly || '?'}, match=${isNiimbot}, bt=${isBluetooth}`);
+
+      const info: NiimbotDeviceInfo = {
+        port: p.path,
+        manufacturer: p.manufacturer,
+        serialNumber: p.serialNumber,
+        vendorId: p.vendorId,
+        productId: p.productId,
+        friendlyName: friendly,
+      };
 
       if (isNiimbot) {
-        candidates.push({
-          port: p.path,
-          manufacturer: p.manufacturer,
-          serialNumber: p.serialNumber,
-          vendorId: p.vendorId,
-          productId: p.productId,
-          friendlyName: friendly,
-        });
+        candidates.push(info);
+      } else if (isBluetooth) {
+        bluetoothToProbe.push(info);
       }
     }
 
+    // Actively probe unrecognized Bluetooth serial ports with a quick handshake
+    if (bluetoothToProbe.length > 0) {
+      // Skip probing if we're already busy (e.g. a print job is running)
+      if (this.busy) {
+        console.log(`[Niimbot] Skipping BT probe — serial port busy`);
+      } else {
+        console.log(`[Niimbot] Probing ${bluetoothToProbe.length} Bluetooth port(s)...`);
+        for (const bt of bluetoothToProbe) {
+          // Skip ports that previously failed with unrecoverable errors
+          if (this.deadPorts.has(bt.port)) {
+            console.log(`[Niimbot]   ${bt.port}: skipped (known dead port)`);
+            continue;
+          }
+          const probeResult = await this.quickProbe(bt.port);
+          if (probeResult) {
+            bt.modelName = probeResult;
+            candidates.push(bt);
+            console.log(`[Niimbot]   ${bt.port}: Niimbot detected (${probeResult})`);
+          } else {
+            console.log(`[Niimbot]   ${bt.port}: no Niimbot response`);
+          }
+        }
+      }
+    }
+
+    console.log(`[Niimbot] Discovered ${candidates.length} Niimbot candidate(s): ${candidates.map(c => c.port).join(', ') || 'none'}`);
     return candidates;
+  }
+
+  /**
+   * Quick probe: try opening a serial port and sending CONNECT to check if
+   * a Niimbot printer is on the other end. Returns model name or null.
+   * Uses a short timeout and a temporary port instance to avoid
+   * interfering with the main connection.
+   *
+   * For Bluetooth SPP ports, the virtual COM port opens instantly but the
+   * underlying BT link may take 500ms+ to become writable — we retry
+   * the CONNECT write if the first attempt fails with "Operation aborted".
+   */
+  private async quickProbe(portPath: string): Promise<string | null> {
+    if (this.busy) return null;
+    this.busy = true;
+    let probePort: SerialPort | null = null;
+    let writeAborted = false;
+
+    try {
+      probePort = new SerialPort({
+        path: portPath,
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        autoOpen: false,
+      });
+
+      // Capture errors so they don't become uncaught exceptions
+      probePort.on('error', (err) => {
+        if (/operation aborted/i.test(err.message)) writeAborted = true;
+        console.log(`[Niimbot]   ${portPath}: port error during probe (${err.message})`);
+      });
+
+      // Open the port
+      await new Promise<void>((resolve, reject) => {
+        probePort!.open((err) => err ? reject(err) : resolve());
+      });
+
+      // Wait for the BT SPP link to fully establish (2s minimum)
+      console.log(`[Niimbot]   ${portPath}: port opened, waiting 2s for BT link...`);
+      await new Promise(r => setTimeout(r, 2000));
+
+      if (writeAborted || !probePort?.isOpen) {
+        // This is the incoming BT port — mark as dead
+        this.deadPorts.add(portPath);
+        console.log(`[Niimbot]   ${portPath}: marked as dead (incoming BT port)`);
+        return null;
+      }
+
+      // Send CONNECT packet
+      const connectPkt = buildConnect();
+      console.log(`[Niimbot]   ${portPath}: sending CONNECT (${connectPkt.toString('hex')})`);
+      let rxBuf = Buffer.alloc(0);
+
+      const gotAck = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          probePort?.removeListener('data', onData);
+          resolve(false);
+        }, 5000);
+
+        const onData = (chunk: Buffer) => {
+          console.log(`[Niimbot]   ${portPath}: RX ${chunk.toString('hex')}`);
+          rxBuf = Buffer.concat([rxBuf, chunk]);
+          const { packets } = decodePackets(rxBuf);
+          for (const pkt of packets) {
+            if (pkt.command === NiimbotResponse.CONNECT_ACK) {
+              clearTimeout(timer);
+              probePort?.removeListener('data', onData);
+              resolve(true);
+              return;
+            }
+          }
+        };
+        probePort!.on('data', onData);
+
+        probePort!.write(connectPkt, (writeErr) => {
+          if (writeErr) {
+            console.log(`[Niimbot]   ${portPath}: write error (${writeErr.message})`);
+            clearTimeout(timer);
+            probePort?.removeListener('data', onData);
+            resolve(false);
+            return;
+          }
+          // Flush the OS buffer — critical for BT SPP
+          probePort!.drain((drainErr) => {
+            if (drainErr) console.log(`[Niimbot]   ${portPath}: drain error (${drainErr.message})`);
+            else console.log(`[Niimbot]   ${portPath}: data flushed, waiting for response...`);
+          });
+        });
+      });
+
+      if (writeAborted) {
+        this.deadPorts.add(portPath);
+        console.log(`[Niimbot]   ${portPath}: marked as dead (write aborted)`);
+        return null;
+      }
+
+      if (!gotAck) return null;
+
+      console.log(`[Niimbot]   ${portPath}: ACK received!`);
+
+      // Try to read area width to identify model
+      let modelName = 'Niimbot';
+      try {
+        const infoPkt = buildGetInfo(InfoCommand.AREA_WIDTH);
+        rxBuf = Buffer.alloc(0);
+
+        const width = await new Promise<number>((resolve) => {
+          const timer = setTimeout(() => resolve(0), 2000);
+          const onData = (chunk: Buffer) => {
+            rxBuf = Buffer.concat([rxBuf, chunk]);
+            const { packets } = decodePackets(rxBuf);
+            for (const pkt of packets) {
+              if (pkt.command === NiimbotResponse.GET_INFO_ACK && pkt.data.length >= 2) {
+                clearTimeout(timer);
+                probePort?.removeListener('data', onData);
+                resolve((pkt.data[0] << 8) | pkt.data[1]);
+                return;
+              }
+            }
+          };
+          probePort!.on('data', onData);
+          probePort!.write(infoPkt, () => probePort!.drain(() => {}));
+        });
+
+        if (width > 0) {
+          for (const [, spec] of Object.entries(NIIMBOT_MODELS)) {
+            if (spec.printWidthDots === width) {
+              modelName = spec.name;
+              break;
+            }
+          }
+          if (modelName === 'Niimbot') modelName = `Niimbot (${width}dots)`;
+        }
+      } catch { /* ignore info read failure */ }
+
+      return modelName;
+    } catch (err) {
+      console.log(`[Niimbot]   ${portPath}: probe failed (${(err as Error).message})`);
+      return null;
+    } finally {
+      this.busy = false;
+      if (probePort?.isOpen) {
+        await new Promise<void>(resolve => probePort!.close(() => resolve()));
+      }
+    }
   }
 
   /**
@@ -121,6 +315,7 @@ export class NiimbotService {
       this.rxBuffer = Buffer.alloc(0);
 
       this.port.on('data', (chunk: Buffer) => {
+        console.log(`[Niimbot] RX: ${chunk.toString('hex')}`);
         this.rxBuffer = Buffer.concat([this.rxBuffer, chunk]);
         this.processReceivedData();
       });
@@ -135,8 +330,10 @@ export class NiimbotService {
         this.connected = false;
       });
 
+      this.busy = true;
       this.port.open(async (err) => {
         if (err) {
+          this.busy = false;
           reject(new Error(`Cannot open port ${portPath}: ${err.message}`));
           return;
         }
@@ -144,12 +341,20 @@ export class NiimbotService {
         console.log(`[Niimbot] Port ${portPath} opened.`);
 
         try {
+          // Wait for the BT SPP link to fully establish.
+          // USB is near-instant, but Bluetooth virtual COM takes 2-3s.
+          await new Promise(r => setTimeout(r, 2000));
+
+          const connectPkt = buildConnect();
+          console.log(`[Niimbot] Sending CONNECT: ${connectPkt.toString('hex')}`);
+
           // Send CONNECT command and wait for ACK
-          await this.sendAndWait(buildConnect(), NiimbotResponse.CONNECT_ACK, 5000);
+          await this.sendAndWait(connectPkt, NiimbotResponse.CONNECT_ACK, 5000);
           this.connected = true;
           console.log('[Niimbot] Connected to printer.');
           resolve();
         } catch (connErr: any) {
+          this.busy = false;
           this.port?.close();
           reject(new Error(`Niimbot handshake failed: ${connErr.message}`));
         }
@@ -162,6 +367,7 @@ export class NiimbotService {
    */
   async disconnect(): Promise<void> {
     this.connected = false;
+    this.busy = false;
     if (!this.port?.isOpen) return;
 
     return new Promise((resolve) => {
@@ -190,6 +396,99 @@ export class NiimbotService {
   }
 
   /**
+   * Get the print head width in dots. Helps identify the model.
+   */
+  async getAreaWidth(): Promise<number> {
+    try {
+      const pkt = await this.sendAndWait(buildGetInfo(InfoCommand.AREA_WIDTH), NiimbotResponse.GET_INFO_ACK, 3000);
+      if (pkt.data.length >= 2) {
+        return pkt.data.readUInt16BE(0);
+      }
+      return pkt.data.length > 0 ? pkt.data[0] : -1;
+    } catch {
+      return -1;
+    }
+  }
+
+  /**
+   * Probe the connected printer to identify its model.
+   * Connects briefly, reads area width, and matches to known models.
+   */
+  async probeModel(portPath: string): Promise<{
+    modelName: string;
+    widthDots: number;
+    detectedLabel?: { widthMm: number; heightMm: number; remaining: number };
+  }> {
+    const wasConnected = this.isConnected();
+    try {
+      if (!wasConnected) {
+        await this.connect(portPath);
+      }
+      const widthDots = await this.getAreaWidth();
+      let modelName = 'Niimbot';
+
+      if (widthDots > 0) {
+        // Match width to known models
+        for (const [, spec] of Object.entries(NIIMBOT_MODELS)) {
+          if (spec.printWidthDots === widthDots) {
+            modelName = spec.name;
+            break;
+          }
+        }
+        if (modelName === 'Niimbot') {
+          modelName = `Niimbot (${widthDots}dots)`;
+        }
+      }
+
+      // Try RFID label detection
+      const detectedLabel = await this.readRfidLabel() ?? undefined;
+
+      return { modelName, widthDots, detectedLabel };
+    } catch {
+      return { modelName: 'Niimbot', widthDots: -1 };
+    } finally {
+      if (!wasConnected) {
+        await this.disconnect().catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Read RFID data from the loaded label roll to detect label dimensions.
+   * Returns null if no RFID data is available (non-RFID rolls or unsupported models).
+   *
+   * Niimbot RFID response format:
+   *   [uuid... (variable)] [widthMm (1 byte)] [heightMm (1 byte)] [qty_hi] [qty_lo] [type (1 byte)]
+   * The last 5 bytes contain: width, height, remaining quantity (u16BE), label type.
+   */
+  async readRfidLabel(): Promise<{ widthMm: number; heightMm: number; remaining: number } | null> {
+    try {
+      const pkt = await this.sendAndWait(
+        buildGetRfid(),
+        NiimbotResponse.GET_RFID_ACK,
+        3000,
+      );
+
+      // Empty or too-short response means no RFID tag / no data
+      if (!pkt.data || pkt.data.length < 5) return null;
+
+      const d = pkt.data;
+      const len = d.length;
+      // Last 5 bytes: [widthMm, heightMm, qty_hi, qty_lo, labelType]
+      const widthMm = d[len - 5];
+      const heightMm = d[len - 4];
+      const remaining = (d[len - 3] << 8) | d[len - 2];
+
+      if (widthMm === 0 || heightMm === 0) return null;
+
+      return { widthMm, heightMm, remaining };
+    } catch {
+      // Timeout or unsupported — not all models/rolls have RFID
+      return null;
+    }
+  }
+
+  /**
    * Print a monochrome bitmap on the Niimbot printer.
    *
    * @param bitmap - Packed 1-bit bitmap (MSB first, 8 pixels per byte)
@@ -214,36 +513,62 @@ export class NiimbotService {
     const bytesPerRow = Math.ceil(widthDots / 8);
 
     try {
+      // Command order follows NiimBlue reference implementation for B1/B21
       // 1. Set label parameters
       await this.sendAndWait(buildSetLabelType(labelType), NiimbotResponse.SET_LABEL_TYPE_ACK, 3000);
       await this.sendAndWait(buildSetDensity(density), NiimbotResponse.SET_LABEL_DENSITY_ACK, 3000);
-      await this.sendAndWait(buildSetQuantity(quantity), NiimbotResponse.SET_QUANTITY_ACK, 3000);
 
       // 2. Start print session
       await this.sendAndWait(buildStartPrint(), NiimbotResponse.START_PRINT_ACK, 5000);
 
-      // 3. Set page dimensions
-      await this.sendAndWait(buildSetDimension(widthDots, heightDots), NiimbotResponse.SET_DIMENSION_ACK, 3000);
-
-      // 4. Start page
+      // 3. Start page FIRST — creates the page context
       await this.sendAndWait(buildStartPagePrint(), NiimbotResponse.START_PAGE_ACK, 3000);
 
+      // 4. Set page dimensions and quantity INSIDE the page context (NiimBlue order)
+      await this.sendAndWait(buildSetDimension(widthDots, heightDots), NiimbotResponse.SET_DIMENSION_ACK, 3000);
+      await this.sendAndWait(buildSetQuantity(quantity), NiimbotResponse.SET_QUANTITY_ACK, 3000);
+
       // 5. Send image data row by row
-      for (let row = 0; row < heightDots; row++) {
+      //    NiimBlue waits for ACK (0x86) on each row. Our previous fire-and-forget
+      //    attempt failed because the printer needs flow control.
+      //    Strategy: try sendAndWait on row 0; if ACK comes, use it for all rows.
+      //    If timeout, fall back to fire-and-forget.
+      console.log(`[Niimbot] Sending ${heightDots} image rows (${bytesPerRow}B each), dimension=${widthDots}w x ${heightDots}h`);
+      const firstRowData = bitmap.subarray(0, bytesPerRow);
+      console.log(`[Niimbot] Row 0 hex: ${firstRowData.toString('hex')}`);
+
+      let useAck = true;
+      try {
+        await this.sendAndWait(buildImageRow(0, firstRowData), NiimbotResponse.IMAGE_DATA_ACK, 2000);
+        console.log('[Niimbot] Row 0 ACK received — using ACK mode for all rows.');
+      } catch {
+        console.log('[Niimbot] Row 0 no ACK — falling back to fire-and-forget mode.');
+        useAck = false;
+      }
+
+      for (let row = (useAck ? 1 : 1); row < heightDots; row++) {
         const rowStart = row * bytesPerRow;
         const rowData = bitmap.subarray(rowStart, rowStart + bytesPerRow);
-        // Pad if necessary
         const paddedRow = rowData.length < bytesPerRow
           ? Buffer.concat([rowData, Buffer.alloc(bytesPerRow - rowData.length)])
           : rowData;
 
-        await this.sendAndWait(buildImageRow(row, paddedRow), NiimbotResponse.IMAGE_DATA_ACK, 2000);
+        if (useAck) {
+          await this.sendAndWait(buildImageRow(row, paddedRow), NiimbotResponse.IMAGE_DATA_ACK, 2000);
+        } else {
+          await this.sendRow(buildImageRow(row, paddedRow));
+        }
       }
+      console.log(`[Niimbot] All ${heightDots} rows sent.`);
 
-      // 6. End page
-      await this.sendAndWait(buildEndPagePrint(), NiimbotResponse.END_PAGE_ACK, 5000);
+      // 6. End page — signals printer that all row data has been sent
+      await this.sendAndWait(buildEndPagePrint(), NiimbotResponse.END_PAGE_ACK, 10000);
 
-      // 7. End print session
+      // 7. Poll print status until printer confirms page is done
+      //    (required by NiimBlue — printer won't finalize without polling)
+      await this.waitForPrintComplete();
+
+      // 8. End print session
       await this.sendAndWait(buildEndPrint(), NiimbotResponse.END_PRINT_ACK, 5000);
 
       console.log(`[Niimbot] Print complete: ${widthDots}x${heightDots} dots, ${quantity} copies`);
@@ -278,8 +603,12 @@ export class NiimbotService {
       setBit(bitmap, bytesPerRow, y, w - 2);
     }
 
-    // Draw "TEST" in big chunky pixels at center
-    const testPattern = renderTextSimple('Hou.la Print TEST', 16);
+    // Draw "Hou.la Print TEST" centered — compute max scale that fits the width
+    const testText = 'Hou.la Print TEST';
+    const maxScaleW = Math.floor((w - 20) / (testText.length * 6));  // 6px per char at scale 1
+    const maxScaleH = Math.floor((h - 20) / 8);                     // 8px per char height at scale 1
+    const scale = Math.max(1, Math.min(maxScaleW, maxScaleH));
+    const testPattern = renderTextSimple(testText, scale);
     const textStartX = Math.floor((w - testPattern.width) / 2);
     const textStartY = Math.floor((h - testPattern.height) / 2);
     overlayBitmap(bitmap, bytesPerRow, testPattern, textStartX, textStartY);
@@ -291,34 +620,98 @@ export class NiimbotService {
   // Internal: serial communication
   // ═══════════════════════════════════════════════════════
 
+  /**
+   * Poll GET_PRINT_STATUS until the printer reports page completion.
+   * NiimBlue reference: after END_PAGE, poll 0xA3 until status == 1 (done).
+   * Status 0 = in progress, 1 = done, other = error/unknown.
+   */
+  private async waitForPrintComplete(timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let polls = 0;
+    while (Date.now() < deadline) {
+      polls++;
+      try {
+        const pkt = await this.sendAndWait(
+          buildGetPrintStatus(),
+          NiimbotResponse.PRINT_STATUS_ACK,
+          3000,
+        );
+        const status = pkt.data.length > 0 ? pkt.data[0] : -1;
+        console.log(`[Niimbot] Print status poll #${polls}: cmd=0x${pkt.command.toString(16)}, status=${status}, data=${pkt.data.toString('hex')}`);
+
+        if (status === 1) {
+          console.log('[Niimbot] Printer reports page complete.');
+          return;
+        }
+        if (status === 0) {
+          // Still printing — wait and poll again
+          await new Promise(r => setTimeout(r, 100));
+          continue;
+        }
+        // Unknown status — wait longer and retry
+        await new Promise(r => setTimeout(r, 300));
+      } catch (err: any) {
+        console.warn(`[Niimbot] Print status poll error: ${err.message}`);
+        // Timeout on individual poll — retry
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    console.warn(`[Niimbot] Print status poll timeout after ${polls} polls — continuing anyway`);
+  }
+
   private send(data: Buffer): void {
     if (!this.port?.isOpen) throw new Error('Port not open');
     this.port.write(data);
+    // Flush the OS buffer — critical for BT SPP where data can sit in buffer
+    this.port.drain(() => {});
+  }
+
+  /**
+   * Send image row data and await drain (no ACK expected).
+   * Includes a small delay for printer buffer pacing.
+   */
+  private sendRow(data: Buffer): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.port?.isOpen) { reject(new Error('Port not open')); return; }
+      this.port.write(data, (writeErr) => {
+        if (writeErr) { reject(writeErr); return; }
+        this.port!.drain((drainErr) => {
+          if (drainErr) { reject(drainErr); return; }
+          // Small pacing delay to avoid overflowing the printer buffer
+          setTimeout(resolve, 5);
+        });
+      });
+    });
   }
 
   private sendAndWait(data: Buffer, expectedResponseCmd: number, timeoutMs: number): Promise<NiimbotPacket> {
     return new Promise((resolve, reject) => {
-      // Set up response listener
-      this.responsePromise = { resolve, reject };
+      const reqCmd = data[2]; // command byte from the sent packet
 
       const timer = setTimeout(() => {
         this.responsePromise = null;
-        reject(new Error(`Timeout waiting for response 0x${expectedResponseCmd.toString(16)}`));
+        reject(new Error(`Timeout waiting for response (cmd=0x${reqCmd.toString(16)})`));
       }, timeoutMs);
 
-      // Wrap resolve to clear timer
-      const originalResolve = resolve;
-      this.responsePromise.resolve = (pkt: NiimbotPacket) => {
-        clearTimeout(timer);
-        this.responsePromise = null;
-        originalResolve(pkt);
-      };
-      this.responsePromise.reject = (err: Error) => {
-        clearTimeout(timer);
-        this.responsePromise = null;
-        reject(err);
+      // Accept any valid response from the printer.
+      // Niimbot B1 uses non-standard ACK codes (sometimes CMD+1, sometimes CMD+0x10,
+      // sometimes 0x00, sometimes completely different like 0xDB). The protocol is
+      // strictly request/response so the next packet is always the answer.
+      this.responsePromise = {
+        resolve: (pkt: NiimbotPacket) => {
+          clearTimeout(timer);
+          this.responsePromise = null;
+          console.log(`[Niimbot] ACK cmd=0x${pkt.command.toString(16)} data=${pkt.data.toString('hex')} for TX 0x${reqCmd.toString(16)}`);
+          resolve(pkt);
+        },
+        reject: (err: Error) => {
+          clearTimeout(timer);
+          this.responsePromise = null;
+          reject(err);
+        },
       };
 
+      console.log(`[Niimbot] TX cmd=0x${reqCmd.toString(16)} (${data.length}B)`);
       this.send(data);
     });
   }

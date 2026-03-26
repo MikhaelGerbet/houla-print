@@ -40,7 +40,9 @@ export class ApiService {
   }
 
   async getPendingJobs(apiKey: string): Promise<PrintJob[]> {
-    return this.fetchWithApiKey('GET', '/api/print/jobs?status=pending', apiKey);
+    const res = await this.fetchWithApiKey('GET', '/api/print/jobs?status=pending', apiKey);
+    // API may return { items: [...], total } or a plain array
+    return Array.isArray(res) ? res : (res?.items ?? []);
   }
 
   async ackJob(apiKey: string, jobId: string, status: 'printed' | 'failed', error?: string): Promise<void> {

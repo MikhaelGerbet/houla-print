@@ -5,10 +5,10 @@
  * Supports: B1, B18, B21, B3S, D11, D110, D101
  *
  * Packet format:
- *   [0x55 0x55] [CMD] [LEN_HI LEN_LO] [DATA...] [CHECKSUM] [0xAA 0xAA]
+ *   [0x55 0x55] [CMD] [LEN] [DATA...] [CHECKSUM] [0xAA 0xAA]
  *   - CMD: 1 byte command type
- *   - LEN: 2 bytes big-endian data length
- *   - CHECKSUM: XOR of CMD ^ LEN_HI ^ LEN_LO ^ each DATA byte
+ *   - LEN: 1 byte data length (max 255)
+ *   - CHECKSUM: XOR of CMD ^ LEN ^ each DATA byte
  *   - Header/footer are fixed markers
  */
 
@@ -40,20 +40,21 @@ export enum NiimbotCommand {
   GET_PRINT_STATUS       = 0xa3,
 }
 
-/** Response commands (printer → host) are CMD + 0x10 typically */
+/** Response commands (printer → host): generally request CMD + 1 */
 export enum NiimbotResponse {
-  CONNECT_ACK            = 0xc1,
+  CONNECT_ACK            = 0xc1,  // … but some B1 models return 0x00 instead
   GET_INFO_ACK           = 0x41,
-  SET_LABEL_TYPE_ACK     = 0x24,
-  SET_LABEL_DENSITY_ACK  = 0x22,
-  START_PRINT_ACK        = 0x02,
+  GET_RFID_ACK           = 0x1b,
+  SET_LABEL_TYPE_ACK     = 0x24,  // 0x23 + 1
+  SET_LABEL_DENSITY_ACK  = 0x22,  // 0x21 + 1
+  START_PRINT_ACK        = 0x02,  // 0x01 + 1
   END_PRINT_ACK          = 0xf4,
-  START_PAGE_ACK         = 0x04,
+  START_PAGE_ACK         = 0x04,  // 0x03 + 1
   END_PAGE_ACK           = 0xe4,
-  SET_DIMENSION_ACK      = 0xd5,
-  SET_QUANTITY_ACK       = 0x16,
+  SET_DIMENSION_ACK      = 0xd5,  // 0xd4 + 1
+  SET_QUANTITY_ACK       = 0x16,  // 0x15 + 1
   HEARTBEAT_ACK          = 0xdd,
-  IMAGE_DATA_ACK         = 0x86,
+  IMAGE_DATA_ACK         = 0x86,  // 0x85 + 1
   PRINT_STATUS_ACK       = 0xa4,
 }
 
@@ -125,21 +126,19 @@ export const DEFAULT_MODEL = NIIMBOT_MODELS.B1;
  */
 export function encodePacket(cmd: number, data: Buffer | number[]): Buffer {
   const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  const len = dataBuf.length;
-  const lenHi = (len >> 8) & 0xff;
-  const lenLo = len & 0xff;
+  const len = dataBuf.length & 0xff;
 
-  // Checksum = XOR of cmd, lenHi, lenLo, and all data bytes
-  let checksum = cmd ^ lenHi ^ lenLo;
+  // Checksum = XOR of cmd, len, and all data bytes
+  let checksum = cmd ^ len;
   for (const byte of dataBuf) {
     checksum ^= byte;
   }
 
   return Buffer.concat([
     PACKET_HEADER,
-    Buffer.from([cmd, lenHi, lenLo]),
+    Buffer.from([cmd, len]),
     dataBuf,
-    Buffer.from([checksum]),
+    Buffer.from([checksum & 0xff]),
     PACKET_FOOTER,
   ]);
 }
@@ -157,7 +156,8 @@ export function decodePackets(buffer: Buffer): { packets: NiimbotPacket[]; remai
   const packets: NiimbotPacket[] = [];
   let offset = 0;
 
-  while (offset < buffer.length - 6) {
+  // Minimum packet: header(2) + cmd(1) + len(1) + checksum(1) + footer(2) = 7
+  while (offset <= buffer.length - 7) {
     // Find header [0x55 0x55]
     if (buffer[offset] !== 0x55 || buffer[offset + 1] !== 0x55) {
       offset++;
@@ -165,18 +165,16 @@ export function decodePackets(buffer: Buffer): { packets: NiimbotPacket[]; remai
     }
 
     const cmd = buffer[offset + 2];
-    const lenHi = buffer[offset + 3];
-    const lenLo = buffer[offset + 4];
-    const dataLen = (lenHi << 8) | lenLo;
+    const dataLen = buffer[offset + 3]; // 1-byte length
 
-    // Need at least: header(2) + cmd(1) + len(2) + data + checksum(1) + footer(2)
-    const totalLen = 2 + 1 + 2 + dataLen + 1 + 2;
+    // Total: header(2) + cmd(1) + len(1) + data(dataLen) + checksum(1) + footer(2)
+    const totalLen = 7 + dataLen;
     if (offset + totalLen > buffer.length) break;
 
-    const data = buffer.subarray(offset + 5, offset + 5 + dataLen);
-    const checksum = buffer[offset + 5 + dataLen];
-    const footerA = buffer[offset + 5 + dataLen + 1];
-    const footerB = buffer[offset + 5 + dataLen + 2];
+    const data = buffer.subarray(offset + 4, offset + 4 + dataLen);
+    const checksum = buffer[offset + 4 + dataLen];
+    const footerA = buffer[offset + 4 + dataLen + 1];
+    const footerB = buffer[offset + 4 + dataLen + 2];
 
     // Validate footer
     if (footerA !== 0xaa || footerB !== 0xaa) {
@@ -184,13 +182,13 @@ export function decodePackets(buffer: Buffer): { packets: NiimbotPacket[]; remai
       continue;
     }
 
-    // Validate checksum
-    let expectedChecksum = cmd ^ lenHi ^ lenLo;
+    // Validate checksum: XOR of cmd, dataLen, and all data bytes
+    let expectedChecksum = cmd ^ dataLen;
     for (const byte of data) {
       expectedChecksum ^= byte;
     }
     if (checksum !== (expectedChecksum & 0xff)) {
-      console.warn('[Niimbot] Checksum mismatch, skipping packet');
+      console.warn(`[Niimbot] Checksum mismatch: expected 0x${(expectedChecksum & 0xff).toString(16)}, got 0x${checksum.toString(16)}`);
       offset++;
       continue;
     }
@@ -212,6 +210,10 @@ export function buildConnect(): Buffer {
 
 export function buildGetInfo(subCmd: InfoCommand): Buffer {
   return encodePacket(NiimbotCommand.GET_INFO, [subCmd]);
+}
+
+export function buildGetRfid(): Buffer {
+  return encodePacket(NiimbotCommand.GET_RFID, [0x01]);
 }
 
 export function buildSetLabelType(type: NiimbotLabelType): Buffer {
@@ -238,6 +240,7 @@ export function buildSetQuantity(quantity: number): Buffer {
 }
 
 export function buildSetDimension(widthDots: number, heightDots: number): Buffer {
+  // Wire format: [width_hi, width_lo, height_hi, height_lo] (NiimBlue convention)
   return encodePacket(NiimbotCommand.SET_DIMENSION, [
     (widthDots >> 8) & 0xff, widthDots & 0xff,
     (heightDots >> 8) & 0xff, heightDots & 0xff,
@@ -256,15 +259,23 @@ export function buildHeartbeat(): Buffer {
   return encodePacket(NiimbotCommand.HEARTBEAT, [0x01]);
 }
 
+export function buildGetPrintStatus(): Buffer {
+  return encodePacket(NiimbotCommand.GET_PRINT_STATUS, [0x01]);
+}
+
 /**
  * Build image data packet for one row.
  * The row data is packed 1-bit (8 pixels per byte, MSB first).
  * Black = 1, White = 0.
+ *
+ * Niimbot B1/B21 image packet format:
+ *   [rowIndex_hi, rowIndex_lo, repeatCount_hi, repeatCount_lo, ...rowData]
+ * repeatCount=1 for single unique lines.
  */
 export function buildImageRow(rowIndex: number, rowData: Buffer): Buffer {
-  // Packet: [rowIndex_hi, rowIndex_lo, ...rowData]
-  const payload = Buffer.alloc(2 + rowData.length);
+  const payload = Buffer.alloc(4 + rowData.length);
   payload.writeUInt16BE(rowIndex, 0);
-  rowData.copy(payload, 2);
+  payload.writeUInt16BE(1, 2);  // repeat count = 1
+  rowData.copy(payload, 4);
   return encodePacket(NiimbotCommand.IMAGE_DATA, payload);
 }
