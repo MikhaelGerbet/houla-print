@@ -299,6 +299,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.AUTH_LOGOUT, async () => {
     socket.disconnectAll();
+    workspaces.clear();
     auth.logout();
     broadcastState();
   });

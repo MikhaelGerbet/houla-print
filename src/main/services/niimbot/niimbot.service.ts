@@ -59,6 +59,8 @@ export class NiimbotService {
   private responsePromise: { resolve: (pkt: NiimbotPacket) => void; reject: (err: Error) => void } | null = null;
   private model: NiimbotModelSpec = DEFAULT_MODEL;
   private connected = false;
+  /** True when connected via Bluetooth SPP (slower pacing needed) */
+  private isBluetooth = false;
 
   /** Mutex: true while a probe, connect, or print is actively using a serial port */
   private busy = false;
@@ -181,9 +183,16 @@ export class NiimbotService {
         console.log(`[Niimbot] Port ${portPath} opened.`);
 
         try {
-          // Small settle delay after port open.
-          // USB is near-instant; BT SPP may need 2-3s but B1 uses USB serial.
-          await new Promise(r => setTimeout(r, 200));
+          // Detect if this is a Bluetooth connection (port name or metadata)
+          const portInfo = (await SerialPort.list()).find(p => p.path === portPath);
+          const portAny = portInfo as any;
+          const friendly = portAny?.friendlyName || '';
+          this.isBluetooth = /bluetooth/i.test(friendly) || /bluetooth/i.test(portInfo?.manufacturer || '');
+
+          // BT SPP needs 2s to establish; USB is near-instant
+          const settleMs = this.isBluetooth ? 2000 : 200;
+          console.log(`[Niimbot] Connection type: ${this.isBluetooth ? 'Bluetooth' : 'USB'}, settle=${settleMs}ms`);
+          await new Promise(r => setTimeout(r, settleMs));
 
           const connectPkt = buildConnect();
           console.log(`[Niimbot] Sending CONNECT: ${connectPkt.toString('hex')}`);
@@ -630,9 +639,8 @@ export class NiimbotService {
         if (writeErr) { reject(writeErr); return; }
         this.port!.drain((drainErr) => {
           if (drainErr) { reject(drainErr); return; }
-          // Small pacing delay — printer firmware needs time to process each row.
-          // 5ms is enough for USB (was 20ms for BT safety).
-          setTimeout(resolve, 5);
+          // BT needs pacing (20ms) to avoid buffer overflow; USB drain() is enough (3ms safety)
+          setTimeout(resolve, this.isBluetooth ? 20 : 3);
         });
       });
     });

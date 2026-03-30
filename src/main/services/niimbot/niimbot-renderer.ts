@@ -270,6 +270,7 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   const estimateH = (ns: number, bs: number): number => {
     let est = 0;
     if (c.orderId) est += bs * 7 + 3;
+    if (c.orderDate) est += bs * 7 + 3;
     est += 4; // separator
     est += ns * 7 + 3; // product name
     if (c.productDescription) est += bs * 7 + 3;
@@ -299,11 +300,12 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   // ---- Build content lines ----
   const lines: { text: string; scale: number; bold: boolean }[] = [];
 
-  // Order info
+  // Order info — orderId on its own line, date+time below
   if (c.orderId) {
-    let orderStr = c.orderId;
-    if (c.orderDate) orderStr += '  ' + c.orderDate;
-    lines.push({ text: truncate(orderStr, maxCharsB), scale: bodyScale, bold: true });
+    lines.push({ text: truncate(c.orderId, maxCharsB), scale: bodyScale, bold: true });
+  }
+  if (c.orderDate) {
+    lines.push({ text: truncate(c.orderDate, maxCharsB), scale: bodyScale, bold: false });
   }
 
   lines.push({ text: '__SEP__', scale: 0, bold: false });
@@ -416,19 +418,20 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
   const maxChars1 = Math.floor(textW / 6);
   let y = m;
 
-  // Header line: brand + order info
+  // Header: brand on left, then order info below
   if (c.brandName) {
     ctx.drawText(c.brandName.toUpperCase(), m, y, 1);
+    y += 10;
   }
+  // Order ID on its own line (bold), date+time below
   if (c.orderId) {
-    const orderInfo = c.orderId + (c.orderDate ? '  ' + c.orderDate : '');
-    const infoW = orderInfo.length * 6;
-    const infoX = Math.min(m + textW - infoW, w - m - infoW);
-    if (infoX > m + (c.brandName?.length || 0) * 6 + 6) {
-      ctx.drawText(orderInfo, infoX, y, 1);
-    }
+    ctx.drawTextBold(truncate(c.orderId, maxChars1), m, y, 1);
+    y += 10;
   }
-  y += 12;
+  if (c.orderDate) {
+    ctx.drawText(truncate(c.orderDate, maxChars1), m, y, 1);
+    y += 10;
+  }
 
   // Separator
   ctx.hLine(m, y, textW, 1);
@@ -540,11 +543,13 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     y += 6;
   }
 
-  // Order info
+  // Order info — orderId on its own line, date+time below
   if (c.orderId) {
-    let orderLine = c.orderId;
-    if (c.orderDate) orderLine += '   ' + c.orderDate;
-    ctx.drawText(truncate(orderLine, maxChars1), m, y, 1);
+    ctx.drawTextBold(truncate(c.orderId, maxChars1), m, y, 1);
+    y += 12;
+  }
+  if (c.orderDate) {
+    ctx.drawText(truncate(c.orderDate, maxChars1), m, y, 1);
     y += 12;
   }
 

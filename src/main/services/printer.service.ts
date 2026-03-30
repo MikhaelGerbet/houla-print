@@ -14,7 +14,7 @@ const MOCK_LABEL_CONTENT: LabelContent = {
   barcode: '3760001234567',
   brandName: 'Ma Boutique',
   orderId: '#10042',
-  orderDate: '26/03/2026',
+  orderDate: '26/03/2026 14:35',
   orderTotal: '89,70 \u20ac',
   quantityFraction: '1/3',
   customerName: 'Jean Dupont',

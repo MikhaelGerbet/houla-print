@@ -15,6 +15,13 @@ export class WorkspaceService {
   ) {}
 
   /**
+   * Clear all in-memory workspace state (call on logout).
+   */
+  clear(): void {
+    this.workspaceStates.clear();
+  }
+
+  /**
    * Refresh the workspace list from the API and sync with stored keys.
    */
   async refresh(): Promise<void> {
@@ -54,12 +61,18 @@ export class WorkspaceService {
       });
     }
 
-    // Remove stored workspaces that no longer exist remotely
+    // Remove workspaces that no longer exist remotely (from store AND memory)
     const remoteIds = new Set(remoteWorkspaces.map(w => w.id));
     for (const storedId of Object.keys(stored)) {
       if (!remoteIds.has(storedId)) {
         this.store.removeWorkspace(storedId);
         this.workspaceStates.delete(storedId);
+      }
+    }
+    // Also clean in-memory entries not in remote (e.g. leftover from previous account)
+    for (const memId of this.workspaceStates.keys()) {
+      if (!remoteIds.has(memId)) {
+        this.workspaceStates.delete(memId);
       }
     }
   }
