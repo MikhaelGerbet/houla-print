@@ -459,6 +459,12 @@ function updateTrayTooltip(): void {
 
 // Handle deep link (houla-print://callback?code=...)
 function handleDeepLink(url: string): void {
+  // Clear any previous session to prevent stale workspace data on account switch
+  // This is critical: without it, workspaces from a previous account remain visible
+  socket.disconnectAll();
+  workspaces.clear();
+  auth.logout();
+
   auth.handleOAuthCallback(url).then(async () => {
     try {
       await workspaces.refresh();

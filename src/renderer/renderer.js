@@ -152,7 +152,7 @@ function renderWorkspaces(workspaces) {
   }
 
   $workspaceList.innerHTML = allWorkspaces.map(ws => `
-    <div class="card">
+    <div class="card${ws.workspace.hasShop ? '' : ' card-disabled'}">
       <div class="card-icon">${ws.workspace.hasShop ? '🏪' : '📁'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(ws.workspace.name)}</div>
@@ -160,7 +160,7 @@ function renderWorkspaces(workspaces) {
       </div>
       <div class="card-action">
         <label class="toggle">
-          <input type="checkbox" ${ws.enabled ? 'checked' : ''} data-workspace-id="${ws.workspace.id}">
+          <input type="checkbox" ${ws.enabled ? 'checked' : ''} ${ws.workspace.hasShop ? '' : 'disabled'} data-workspace-id="${ws.workspace.id}">
           <span class="toggle-slider"></span>
         </label>
       </div>

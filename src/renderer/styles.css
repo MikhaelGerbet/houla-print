@@ -483,6 +483,17 @@ body {
   transform: translateX(16px);
 }
 
+.toggle input:disabled + .toggle-slider {
+  background: var(--border);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.card-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 /* ═══════════════════════════════════════════════════════
    Assignment List (Printer → Job Type)
    ═══════════════════════════════════════════════════════ */
