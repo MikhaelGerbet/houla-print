@@ -2,7 +2,7 @@ import Store from 'electron-store';
 import { app, safeStorage } from 'electron';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { PrinterAssignments, WorkspaceState } from '../../shared/types';
+import { PrinterAssignments, PrintHistoryEntry, WorkspaceState } from '../../shared/types';
 import { API_URLS, APP_URLS } from '../../shared/config';
 
 interface StoreSchema {
@@ -27,6 +27,11 @@ interface StoreSchema {
   // Printer-detected label formats: printerName → { widthMm, heightMm }
   printerLabelFormats: Record<string, { widthMm: number; heightMm: number }>;
 
+  // Print history (persistent, capped at 200 entries)
+  printHistory: PrintHistoryEntry[];
+  failedTodayCount: number;
+  failedTodayDate: string; // YYYY-MM-DD — reset daily
+
   // App settings
   apiUrl: string;
   appUrl: string;
@@ -47,6 +52,9 @@ const STORE_DEFAULTS: StoreSchema = {
   printedTodayCount: 0,
   printedTodayDate: new Date().toISOString().split('T')[0],
   printerLabelFormats: {},
+  printHistory: [],
+  failedTodayCount: 0,
+  failedTodayDate: new Date().toISOString().split('T')[0],
   apiUrl: API_URLS.production,
   appUrl: APP_URLS.production,
   env: 'production',
@@ -252,5 +260,52 @@ export class StoreService {
     this.store.set('env', env);
     this.store.set('apiUrl', API_URLS[env]);
     this.store.set('appUrl', APP_URLS[env]);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Print history (persistent, capped)
+  // ═══════════════════════════════════════════════════════
+
+  private static MAX_HISTORY = 200;
+
+  addHistoryEntry(entry: PrintHistoryEntry): void {
+    const history = this.store.get('printHistory') || [];
+    history.unshift(entry); // newest first
+    if (history.length > StoreService.MAX_HISTORY) {
+      history.length = StoreService.MAX_HISTORY;
+    }
+    this.store.set('printHistory', history);
+  }
+
+  getHistory(): PrintHistoryEntry[] {
+    return this.store.get('printHistory') || [];
+  }
+
+  clearHistory(): void {
+    this.store.set('printHistory', []);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Failed today counter
+  // ═══════════════════════════════════════════════════════
+
+  incrementFailedToday(): number {
+    const today = new Date().toISOString().split('T')[0];
+    const storedDate = this.store.get('failedTodayDate');
+    if (storedDate !== today) {
+      this.store.set('failedTodayDate', today);
+      this.store.set('failedTodayCount', 0);
+    }
+    const count = this.store.get('failedTodayCount') + 1;
+    this.store.set('failedTodayCount', count);
+    return count;
+  }
+
+  getFailedTodayCount(): number {
+    const today = new Date().toISOString().split('T')[0];
+    if (this.store.get('failedTodayDate') !== today) {
+      return 0;
+    }
+    return this.store.get('failedTodayCount');
   }
 }

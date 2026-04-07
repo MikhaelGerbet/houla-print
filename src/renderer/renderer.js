@@ -24,6 +24,8 @@ const $statusDot = document.getElementById('status-dot');
 const $statusText = document.getElementById('status-text');
 const $statPending = document.getElementById('stat-pending');
 const $statToday = document.getElementById('stat-today');
+const $statFailed = document.getElementById('stat-failed');
+const $sepFailed = document.getElementById('sep-failed');
 const $workspaceList = document.getElementById('workspace-list');
 const $printerList = document.getElementById('printer-list');
 const $assignmentList = document.getElementById('assignment-list');
@@ -35,6 +37,7 @@ const $errorText = document.getElementById('error-text');
 const $envBadge = document.getElementById('env-badge');
 const $settingEnv = document.getElementById('setting-env');
 const $settingApiUrl = document.getElementById('setting-api-url');
+const $historyList = document.getElementById('history-list');
 
 const JOB_TYPE_LABELS = {
   product_label: 'Étiquettes produits',
@@ -109,6 +112,17 @@ function updateUI(state) {
   $statPending.textContent = `${state.pendingJobsCount} en attente`;
   $statToday.textContent = `${state.printedTodayCount} imprimé(s)`;
 
+  // Failed counter (hidden when 0)
+  const failedCount = state.failedTodayCount || 0;
+  if (failedCount > 0) {
+    $statFailed.textContent = `${failedCount} échoué(s)`;
+    $statFailed.classList.remove('hidden');
+    $sepFailed.classList.remove('hidden');
+  } else {
+    $statFailed.classList.add('hidden');
+    $sepFailed.classList.add('hidden');
+  }
+
   // Environment badge
   if (state.env === 'development') {
     $envBadge.classList.remove('hidden');
@@ -136,6 +150,7 @@ function updateUI(state) {
   }
   renderAssignments(state.printerAssignments, state.printers);
   renderLabelSizes(state.workspaces);
+  renderHistory(state.printHistory);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -548,6 +563,86 @@ function showDetectNotification(success, detectedLabel, errorMsg) {
 }
 
 
+// ═══════════════════════════════════════════════════════
+// Print history
+// ═══════════════════════════════════════════════════════
+
+const HISTORY_TYPE_LABELS = {
+  product_label: 'Étiquette',
+  order_summary: 'Récap.',
+  invoice: 'Facture',
+  shipping_label: 'Expédition',
+  packing_slip: 'Bordereau',
+};
+
+function renderHistory(history) {
+  if (!$historyList) return;
+
+  if (!history || history.length === 0) {
+    $historyList.innerHTML = '<div class="empty-state">Aucune impression enregistrée</div>';
+    return;
+  }
+
+  $historyList.innerHTML = history.map(entry => {
+    const isError = entry.status === 'failed';
+    const statusIcon = isError ? '✕' : '✓';
+    const statusClass = isError ? 'history-failed' : 'history-success';
+    const time = formatTime(entry.timestamp);
+    const typeLabel = HISTORY_TYPE_LABELS[entry.type] || entry.type;
+    const retryBtn = isError
+      ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="Réessayer">↻</button>`
+      : '';
+    const errorLine = isError && entry.error
+      ? `<div class="history-error">${escapeHtml(entry.error)}</div>`
+      : '';
+
+    return `
+      <div class="history-item ${statusClass}">
+        <span class="history-status-icon">${statusIcon}</span>
+        <div class="history-body">
+          <div class="history-title">${escapeHtml(entry.productName)}</div>
+          <div class="history-meta">${typeLabel} • ${time}${entry.attempts > 1 ? ' • ' + entry.attempts + ' tentatives' : ''}</div>
+          ${errorLine}
+        </div>
+        ${retryBtn}
+      </div>
+    `;
+  }).join('');
+
+  // Bind retry buttons
+  $historyList.querySelectorAll('[data-retry-job]').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const jobId = btn.dataset.retryJob;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        await api.retryJob(jobId);
+      } catch (err) {
+        console.error('[Renderer] Retry failed:', err);
+      }
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = '↻';
+      }, 2000);
+    });
+  });
+}
+
+function formatTime(isoString) {
+  try {
+    const d = new Date(isoString);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const time = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    if (sameDay) return time;
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' + time;
+  } catch {
+    return '';
+  }
+}
+
+
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     // Remove active from all tabs
@@ -602,6 +697,10 @@ bindBtn('btn-refresh-printers', async () => {
   }
 });
 bindBtn('btn-retry-all', () => api.retryAllFailed());
+bindBtn('btn-clear-history', async () => {
+  await api.clearHistory();
+  if ($historyList) $historyList.innerHTML = '<div class="empty-state">Aucune impression enregistrée</div>';
+});
 bindBtn('btn-open-dashboard', () => {
   const appUrl = currentState?.appUrl || 'https://app.hou.la';
   api.openExternal(`${appUrl}/manager`);

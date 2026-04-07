@@ -2,7 +2,7 @@ import { Notification } from 'electron';
 import { StoreService } from './store.service';
 import { ApiService } from './api.service';
 import { PrinterService } from './printer.service';
-import { PrintJob, WorkspaceState } from '../../shared/types';
+import { PrintJob, PrintHistoryEntry, WorkspaceState } from '../../shared/types';
 import { LabelContent } from './niimbot';
 
 const MAX_RETRIES = 3;
@@ -112,6 +112,9 @@ export class QueueService {
       this.pendingJobs.delete(jobId);
       this.store.incrementPrintedToday();
       this.lastError = null;
+
+      // Record in persistent history
+      this.store.addHistoryEntry(this.buildHistoryEntry(job, 'printed', null, entry.retries));
     } catch (err: any) {
       const errorMsg = err.message || String(err);
       console.error(`Print failed for job ${jobId}:`, errorMsg);
@@ -122,6 +125,10 @@ export class QueueService {
         await this.api.ackJob(apiKey, job.id, 'failed', errorMsg).catch(console.error);
         this.pendingJobs.delete(jobId);
         this.lastError = `Job ${jobId.substring(0, 8)} échoué: ${errorMsg}`;
+        this.store.incrementFailedToday();
+
+        // Record in persistent history
+        this.store.addHistoryEntry(this.buildHistoryEntry(job, 'failed', errorMsg, entry.retries));
 
         new Notification({
           title: 'Hou.la Print — Erreur',
@@ -272,15 +279,63 @@ export class QueueService {
     return this.store.getPrintedTodayCount();
   }
 
+  getFailedTodayCount(): number {
+    return this.store.getFailedTodayCount();
+  }
+
   getLastError(): string | null {
     return this.lastError;
   }
 
-  getStats(): { pending: number; printedToday: number; lastError: string | null } {
+  getHistory(): PrintHistoryEntry[] {
+    return this.store.getHistory();
+  }
+
+  clearHistory(): void {
+    this.store.clearHistory();
+  }
+
+  getStats(): { pending: number; printedToday: number; failedToday: number; lastError: string | null } {
     return {
       pending: this.getPendingCount(),
       printedToday: this.getPrintedTodayCount(),
+      failedToday: this.getFailedTodayCount(),
       lastError: this.lastError,
+    };
+  }
+
+  /**
+   * Retry a single failed job by re-fetching it from the API.
+   */
+  async retryJob(jobId: string): Promise<void> {
+    // Find the workspace and apiKey for this job from history
+    const history = this.store.getHistory();
+    const entry = history.find(h => h.jobId === jobId);
+    if (!entry) return;
+
+    const workspaces = this.store.getWorkspaces();
+    const wsData = workspaces[entry.workspaceId];
+    if (!wsData?.apiKey) return;
+
+    // Re-fetch pending jobs for this workspace — the API marks failed jobs as re-queueable
+    await this.fetchPendingForWorkspace(entry.workspaceId, wsData.apiKey);
+  }
+
+  /**
+   * Build a history entry from a completed (success or failed) print job.
+   */
+  private buildHistoryEntry(job: PrintJob, status: 'printed' | 'failed', error: string | null, attempts: number): PrintHistoryEntry {
+    const p = job.payload || {};
+    return {
+      id: `${job.id}-${Date.now()}`,
+      jobId: job.id,
+      workspaceId: job.workspaceId,
+      type: job.type,
+      status,
+      productName: (p.productName as string) || (p.name as string) || job.type,
+      error,
+      attempts,
+      timestamp: new Date().toISOString(),
     };
   }
 

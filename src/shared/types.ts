@@ -82,6 +82,20 @@ export interface PrinterAssignments {
   [key: string]: string | null;
 }
 
+export type PrintHistoryStatus = 'printed' | 'failed';
+
+export interface PrintHistoryEntry {
+  id: string;
+  jobId: string;
+  workspaceId: string;
+  type: PrintJobType;
+  status: PrintHistoryStatus;
+  productName: string;
+  error: string | null;
+  attempts: number;
+  timestamp: string; // ISO 8601
+}
+
 export type ConnectionStatus = 'connected' | 'disconnected' | 'no-workspace' | 'error';
 
 export interface AppState {
@@ -94,6 +108,8 @@ export interface AppState {
   printerLabelFormats: Record<string, { widthMm: number; heightMm: number }>;
   pendingJobsCount: number;
   printedTodayCount: number;
+  failedTodayCount: number;
+  printHistory: PrintHistoryEntry[];
   lastError: string | null;
   env: 'production' | 'development';
   apiUrl: string;
@@ -127,6 +143,9 @@ export const IPC = {
   // Print queue
   QUEUE_STATS: 'queue:stats',
   QUEUE_RETRY_ALL: 'queue:retry-all',
+  QUEUE_RETRY_JOB: 'queue:retry-job',
+  QUEUE_HISTORY: 'queue:history',
+  QUEUE_CLEAR_HISTORY: 'queue:clear-history',
 
   // App
   APP_QUIT: 'app:quit',

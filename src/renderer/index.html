@@ -51,12 +51,15 @@
         <span class="status-stat" id="stat-pending">0 en attente</span>
         <span class="status-sep">•</span>
         <span class="status-stat" id="stat-today">0 imprimé(s)</span>
+        <span class="status-sep status-sep-failed hidden" id="sep-failed">•</span>
+        <span class="status-stat status-stat-failed hidden" id="stat-failed">0 échoué(s)</span>
       </div>
 
       <!-- Tabs -->
       <nav class="tabs">
         <button class="tab active" data-tab="workspaces">Boutiques</button>
         <button class="tab" data-tab="printers">Imprimantes</button>
+        <button class="tab" data-tab="history">Historique</button>
         <button class="tab" data-tab="settings">Paramètres</button>
       </nav>
 
@@ -108,6 +111,17 @@
             </div>
             <div class="label-preview-hint">Données fictives — rendu réel identique</div>
           </div>
+        </div>
+      </div>
+
+      <!-- Tab: History -->
+      <div class="tab-panel hidden" id="panel-history">
+        <div class="panel-header">
+          <h2>Historique des impressions</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-clear-history">Effacer</button>
+        </div>
+        <div class="history-list" id="history-list">
+          <div class="empty-state">Aucune impression enregistrée</div>
         </div>
       </div>
 

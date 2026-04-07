@@ -395,6 +395,15 @@ function registerIpcHandlers(): void {
     await queue.retryAllFailed();
     broadcastState();
   });
+  ipcMain.handle(IPC.QUEUE_RETRY_JOB, async (_e, jobId: string) => {
+    await queue.retryJob(jobId);
+    broadcastState();
+  });
+  ipcMain.handle(IPC.QUEUE_HISTORY, () => queue.getHistory());
+  ipcMain.handle(IPC.QUEUE_CLEAR_HISTORY, () => {
+    queue.clearHistory();
+    broadcastState();
+  });
 
   // Environment
   ipcMain.handle(IPC.SET_ENV, (_e, env: 'production' | 'development') => {
@@ -438,6 +447,8 @@ function getAppState(): AppState {
     printerAssignments: store.getPrinterAssignments(),
     pendingJobsCount: queue.getPendingCount(),
     printedTodayCount: queue.getPrintedTodayCount(),
+    failedTodayCount: queue.getFailedTodayCount(),
+    printHistory: queue.getHistory(),
     lastError: lastConnectionError || queue.getLastError(),
     env: store.getEnv(),
     apiUrl: store.getApiUrl(),
