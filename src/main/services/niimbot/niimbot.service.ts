@@ -475,50 +475,146 @@ export class NiimbotService {
     const bytesPerRow = Math.ceil(widthDots / 8);
 
     try {
+      const t0 = Date.now();
       // B1 print task sequence (from NiimBlue official docs)
       // Init phase
       await this.sendAndWait(buildSetDensity(density), NiimbotResponse.SET_LABEL_DENSITY_ACK, 3000);
       await this.sendAndWait(buildSetLabelType(labelType), NiimbotResponse.SET_LABEL_TYPE_ACK, 3000);
       await this.sendAndWait(buildStartPrint(quantity), NiimbotResponse.START_PRINT_ACK, 5000);
+      const tInit = Date.now();
 
       // Page phase
       await this.sendAndWait(buildStartPagePrint(), NiimbotResponse.START_PAGE_ACK, 3000);
       await this.sendAndWait(buildSetPageSize(heightDots, widthDots, quantity), NiimbotResponse.SET_PAGE_SIZE_ACK, 3000);
 
       // Image data — one-way packets, no ACK expected per NiimBlue protocol
-      console.log(`[Niimbot] Sending ${heightDots} image rows (${bytesPerRow}B each), dimension=${widthDots}w x ${heightDots}h`);
-
       for (let row = 0; row < heightDots; row++) {
         const rowStart = row * bytesPerRow;
         const rowData = bitmap.subarray(rowStart, rowStart + bytesPerRow);
         const paddedRow = rowData.length < bytesPerRow
           ? Buffer.concat([rowData, Buffer.alloc(bytesPerRow - rowData.length)])
           : rowData;
-
-        if (row === 0) {
-          console.log(`[Niimbot] Row 0 hex: ${paddedRow.toString('hex')}`);
-        }
-
         await this.sendRow(buildImageRow(row, paddedRow));
       }
-      console.log(`[Niimbot] All ${heightDots} rows sent.`);
+      const tImage = Date.now();
 
       // End page
       await this.sendAndWait(buildEndPagePrint(), NiimbotResponse.END_PAGE_ACK, 10000);
+      const tEndPage = Date.now();
 
-      // 7. Poll print status until printer confirms page is done
-      //    (required by NiimBlue — printer won't finalize without polling)
+      // Poll print status until printer confirms page is done
       await this.waitForPrintComplete();
+      const tPoll = Date.now();
 
-      // 8. End print session
+      // End print session
       await this.sendAndWait(buildEndPrint(), NiimbotResponse.END_PRINT_ACK, 5000);
+      const tEnd = Date.now();
 
-      console.log(`[Niimbot] Print complete: ${widthDots}x${heightDots} dots, ${quantity} copies`);
+      console.log(`[Niimbot] Print complete: ${widthDots}x${heightDots} dots — init:${tInit - t0}ms image:${tImage - tInit}ms endPage:${tEndPage - tImage}ms poll:${tPoll - tEndPage}ms end:${tEnd - tPoll}ms TOTAL:${tEnd - t0}ms`);
       return { success: true };
     } catch (err: any) {
       console.error('[Niimbot] Print failed:', err.message);
       return { success: false, error: err.message };
     }
+  }
+
+  /**
+   * Print multiple DIFFERENT bitmaps as fast sequential individual prints.
+   * Each label gets its own START_PRINT(1)→END_PRINT cycle so the printer
+   * fully ejects each label (user can tear it off). But we skip redundant
+   * SET_DENSITY and SET_LABEL_TYPE for labels 2+ since the printer retains
+   * these settings across print sessions.
+   *
+   * Returns per-page results so the caller can ACK successful pages individually.
+   */
+  async printBitmapSequence(
+    pages: Array<{ bitmap: Buffer; widthDots: number; heightDots: number }>,
+    density = 3,
+    labelType: NiimbotLabelType = NiimbotLabelType.GAP,
+  ): Promise<{ results: NiimbotPrintResult[]; totalPrinted: number }> {
+    if (!this.isConnected()) {
+      return {
+        results: pages.map(() => ({ success: false, error: 'Imprimante non connectée' })),
+        totalPrinted: 0,
+      };
+    }
+
+    if (pages.length === 0) {
+      return { results: [], totalPrinted: 0 };
+    }
+
+    // Single page — delegate to standard method
+    if (pages.length === 1) {
+      const r = await this.printBitmap(pages[0].bitmap, pages[0].widthDots, pages[0].heightDots, density, labelType);
+      return { results: [r], totalPrinted: r.success ? 1 : 0 };
+    }
+
+    const results: NiimbotPrintResult[] = [];
+    let totalPrinted = 0;
+    const sessionStart = Date.now();
+
+    console.log(`[Niimbot] Sequence print: ${pages.length} labels`);
+
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const bytesPerRow = Math.ceil(page.widthDots / 8);
+      const pageStart = Date.now();
+
+      try {
+        // Init — only send density/labelType for the FIRST label (printer retains settings)
+        if (i === 0) {
+          await this.sendAndWait(buildSetDensity(density), NiimbotResponse.SET_LABEL_DENSITY_ACK, 3000);
+          await this.sendAndWait(buildSetLabelType(labelType), NiimbotResponse.SET_LABEL_TYPE_ACK, 3000);
+        }
+        await this.sendAndWait(buildStartPrint(1), NiimbotResponse.START_PRINT_ACK, 5000);
+
+        // Page
+        await this.sendAndWait(buildStartPagePrint(), NiimbotResponse.START_PAGE_ACK, 3000);
+        await this.sendAndWait(
+          buildSetPageSize(page.heightDots, page.widthDots, 1),
+          NiimbotResponse.SET_PAGE_SIZE_ACK,
+          3000,
+        );
+
+        // Image data (one-way, no ACK)
+        for (let row = 0; row < page.heightDots; row++) {
+          const rowStart = row * bytesPerRow;
+          const rowData = page.bitmap.subarray(rowStart, rowStart + bytesPerRow);
+          const paddedRow = rowData.length < bytesPerRow
+            ? Buffer.concat([rowData, Buffer.alloc(bytesPerRow - rowData.length)])
+            : rowData;
+          await this.sendRow(buildImageRow(row, paddedRow));
+        }
+        const tImage = Date.now();
+
+        // End page + poll + end session
+        await this.sendAndWait(buildEndPagePrint(), NiimbotResponse.END_PAGE_ACK, 10000);
+        const tEndPage = Date.now();
+
+        await this.waitForPrintComplete();
+        const tPoll = Date.now();
+
+        await this.sendAndWait(buildEndPrint(), NiimbotResponse.END_PRINT_ACK, 5000);
+        const tEnd = Date.now();
+
+        results.push({ success: true });
+        totalPrinted++;
+        console.log(`[Niimbot] Label ${i + 1}/${pages.length} — image:${tImage - pageStart}ms endPage:${tEndPage - tImage}ms poll:${tPoll - tEndPage}ms end:${tEnd - tPoll}ms total:${tEnd - pageStart}ms`);
+      } catch (err: any) {
+        console.error(`[Niimbot] Label ${i + 1}/${pages.length} failed: ${err.message}`);
+        results.push({ success: false, error: err.message });
+        // Try to clean up the session
+        try { await this.sendAndWait(buildEndPrint(), NiimbotResponse.END_PRINT_ACK, 3000); } catch { /* ignore */ }
+        // Stop batch on failure
+        for (let j = i + 1; j < pages.length; j++) {
+          results.push({ success: false, error: 'Skipped after previous label failure' });
+        }
+        break;
+      }
+    }
+
+    console.log(`[Niimbot] Sequence complete: ${totalPrinted}/${pages.length} labels in ${Date.now() - sessionStart}ms`);
+    return { results, totalPrinted };
   }
 
   /**
@@ -587,8 +683,9 @@ export class NiimbotService {
    * NiimBlue reference: after END_PAGE, poll 0xA3 until status == 1 (done).
    * Status 0 = in progress, 1 = done, other = error/unknown.
    */
-  private async waitForPrintComplete(timeoutMs = 5000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
+  private async waitForPrintComplete(timeoutMs = 10000): Promise<void> {
+    const startTime = Date.now();
+    const deadline = startTime + timeoutMs;
     let polls = 0;
     while (Date.now() < deadline) {
       polls++;
@@ -602,16 +699,15 @@ export class NiimbotService {
         console.log(`[Niimbot] Print status poll #${polls}: cmd=0x${pkt.command.toString(16)}, status=${status}, data=${pkt.data.toString('hex')}`);
 
         if (status === 1) {
-          console.log('[Niimbot] Printer reports page complete.');
+          console.log(`[Niimbot] Printer reports page complete (${polls} polls, ${Date.now() - startTime}ms).`);
           return;
         }
         if (status === 0) {
-          // Still printing — wait and poll again
-          await new Promise(r => setTimeout(r, 50));
+          // Still printing — poll again quickly (no artificial delay, sendAndWait provides pacing)
           continue;
         }
-        // Unknown status — retry quickly
-        await new Promise(r => setTimeout(r, 100));
+        // Unknown status — brief pause before retry
+        await new Promise(r => setTimeout(r, 30));
       } catch (err: any) {
         console.warn(`[Niimbot] Print status poll error: ${err.message}`);
         // Timeout on individual poll — retry

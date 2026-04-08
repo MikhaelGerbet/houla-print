@@ -91,6 +91,10 @@ export interface PrintHistoryEntry {
   type: PrintJobType;
   status: PrintHistoryStatus;
   productName: string;
+  customerName?: string;
+  socialHandle?: string;
+  price?: string;
+  orderDate?: string;
   error: string | null;
   attempts: number;
   timestamp: string; // ISO 8601

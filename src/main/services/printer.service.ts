@@ -270,6 +270,33 @@ export class PrinterService {
   }
 
   /**
+   * Print multiple different labels as fast sequential individual prints.
+   * Each label fully ejects (user can tear it off), but SET_DENSITY/SET_LABEL_TYPE
+   * are only sent once (printer retains settings). Connection stays open.
+   * Returns per-page success info so caller can ACK individually.
+   */
+  async printNiimbotBatch(
+    printerName: string,
+    labels: Array<{ content: LabelContent; labelSize: import('../../shared/types').PrintLabelSize }>,
+    model: NiimbotModelSpec = DEFAULT_MODEL,
+  ): Promise<{ results: Array<{ success: boolean; error?: string }>; totalPrinted: number }> {
+    const portPath = this.extractNiimbotPort(printerName);
+
+    if (!this.niimbot.isConnected() || this.connectedNiimbotPort !== portPath) {
+      await this.niimbot.connect(portPath);
+      this.connectedNiimbotPort = portPath;
+    }
+
+    // Render all labels to bitmaps upfront (no rendering between prints)
+    const pages = labels.map(l => {
+      const label = renderProductLabel(l.content, l.labelSize, model);
+      return { bitmap: label.bitmap, widthDots: label.widthDots, heightDots: label.heightDots };
+    });
+
+    return this.niimbot.printBitmapSequence(pages);
+  }
+
+  /**
    * Test print on a Niimbot printer — uses the V2 mock label layout.
    * Auto-detects label dimensions via RFID, then prints a full mock label.
    */

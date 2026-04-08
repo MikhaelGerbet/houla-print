@@ -171,6 +171,8 @@ export class QueueService {
         body: `${newCount} nouveau${newCount > 1 ? 'x' : ''} job${newCount > 1 ? 's' : ''} d'impression`,
       }).show();
       this.onStateChange?.();
+      // Trigger immediate processing instead of waiting for 2s timer
+      setImmediate(() => this.processNext());
     }
   }
 
@@ -271,10 +273,30 @@ export class QueueService {
     if (!selectedJobId || !selectedEntry || !selectedPrinter) return;
 
     this.processing = true;
+    let shouldContinue = false;
 
+    const printerName = selectedPrinter;
+    const isNiimbot = printerName.startsWith('niimbot:') || this.isNiimbotPrinter(printerName);
+
+    // ── NIIMBOT BATCH PATH ──
+    // Collect all eligible jobs for the same Niimbot printer and print in one session.
+    if (isNiimbot) {
+      const batch = this.collectBatchForPrinter(printerName, now);
+      if (batch.length > 1) {
+        console.log(`[Queue] Niimbot batch: ${batch.length} jobs for "${printerName}"`);
+        shouldContinue = await this.processNiimbotBatch(batch, printerName);
+        this.processing = false;
+        this.onStateChange?.();
+        if (shouldContinue && this.pendingJobs.size > 0) {
+          setImmediate(() => this.processNext());
+        }
+        return;
+      }
+    }
+
+    // ── SINGLE JOB PATH ──
     const jobId = selectedJobId;
     const entry = selectedEntry;
-    const printerName = selectedPrinter;
     const { job, apiKey } = entry;
     const isReprint = apiKey === '__reprint__';
 
@@ -289,19 +311,15 @@ export class QueueService {
       this.store.removeFromPendingQueue(jobId);
       this.store.incrementPrintedToday();
       this.lastError = null;
+      shouldContinue = true;
 
       // Clear offline state for this printer
-      if (this.offlinePrinters.has(printerName)) {
-        this.offlinePrinters.delete(printerName);
-        console.log(`[Queue] Printer "${printerName}" back online — spooled jobs resuming`);
-        new Notification({
-          title: 'Hou.la Print',
-          body: `Imprimante "${printerName}" reconnectée — reprise des impressions`,
-        }).show();
-      }
+      this.clearOfflineState(printerName);
 
-      // Record in persistent history
-      this.store.addHistoryEntry(this.buildHistoryEntry(job, 'printed', null, entry.retries));
+      // Record in persistent history (skip reprints to avoid clutter)
+      if (!isReprint) {
+        this.store.addHistoryEntry(this.buildHistoryEntry(job, 'printed', null, entry.retries));
+      }
     } catch (err: any) {
       const errorMsg = err.message || String(err);
       console.error(`Print failed for job ${jobId} on printer "${printerName}":`, errorMsg);
@@ -362,6 +380,223 @@ export class QueueService {
       }
     } finally {
       this.processing = false;
+      this.onStateChange?.();
+      // Immediately process next job without waiting for 2s timer tick
+      if (shouldContinue && this.pendingJobs.size > 0) {
+        setImmediate(() => this.processNext());
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Niimbot batch printing
+  // ═══════════════════════════════════════════════════════
+
+  /** Maximum number of labels to batch in a single Niimbot print session */
+  private static readonly MAX_BATCH_SIZE = 10;
+
+  /**
+   * Collect all eligible pending jobs for a given printer (up to MAX_BATCH_SIZE).
+   * Returns entries in queue order (FIFO).
+   */
+  private collectBatchForPrinter(
+    printerName: string,
+    now: number,
+  ): Array<{ jobId: string; entry: { job: PrintJob; apiKey: string; retries: number } }> {
+    const batch: Array<{ jobId: string; entry: { job: PrintJob; apiKey: string; retries: number } }> = [];
+
+    for (const [jobId, entry] of this.pendingJobs) {
+      if (batch.length >= QueueService.MAX_BATCH_SIZE) break;
+
+      const resolvedPrinter = this.resolvePrinter(entry.job.type);
+      if (resolvedPrinter !== printerName) continue;
+
+      const offlineState = this.offlinePrinters.get(resolvedPrinter);
+      if (offlineState && now < offlineState.nextRetryAt) continue;
+
+      batch.push({ jobId, entry });
+    }
+
+    return batch;
+  }
+
+  /**
+   * Build label content from a job payload (extracted from executeNiimbotPrint).
+   */
+  private buildLabelContentFromJob(job: PrintJob): { content: LabelContent; labelSize: string } {
+    const p = job.payload;
+
+    const formatPrice = (cents: unknown, currency: unknown): string | undefined => {
+      if (typeof cents !== 'number') return undefined;
+      const cur = (currency as string) || 'EUR';
+      const val = (cents / 100).toFixed(2).replace('.', ',');
+      return cur === 'EUR' ? val + ' €' : val + ' ' + cur;
+    };
+
+    const content: LabelContent = {
+      productName: (p.productName as string) || (p.name as string) || 'Produit',
+      variant: (p.variant as string) || (p.variants as string) || undefined,
+      sku: (p.sku as string) || undefined,
+      price: (p.price as string) || formatPrice(p.priceCents, p.currency),
+      originalPrice: (p.originalPrice as string) || formatPrice(p.originalPriceCents, p.currency),
+      barcode: (p.barcode as string) || undefined,
+      orderId: (p.orderNumber as string) || (p.orderId as string) || undefined,
+      orderDate: (p.orderDate as string) || undefined,
+      orderTotal: (p.orderTotal as string) || (p.orderTotalFormatted as string) || undefined,
+      quantityFraction: buildQuantityFraction(p.quantityIndex, p.quantity),
+      customerName: (p.customerName as string) || undefined,
+      socialHandle: (p.socialHandle as string) || undefined,
+      country: (p.country as string) || undefined,
+      qrCodeUrl: (p.qrCodeUrl as string) || undefined,
+      brandName: (p.brandName as string) || undefined,
+      websiteUrl: (p.websiteUrl as string) || undefined,
+    };
+
+    const printerFormat = this.store.getPrinterLabelFormat(
+      this.resolvePrinter(job.type) || '',
+    );
+    const labelSize = printerFormat
+      ? `${printerFormat.widthMm}x${printerFormat.heightMm}`
+      : '40x30';
+
+    return { content, labelSize };
+  }
+
+  /**
+   * Process a batch of Niimbot jobs as fast sequential individual prints.
+   * Each label fully ejects (labels 2+ skip SET_DENSITY/SET_LABEL_TYPE).
+   * All bitmaps pre-rendered upfront, connection stays open between prints.
+   * Returns true if at least one page succeeded (to trigger immediate reprocess).
+   */
+  private async processNiimbotBatch(
+    batch: Array<{ jobId: string; entry: { job: PrintJob; apiKey: string; retries: number } }>,
+    printerName: string,
+  ): Promise<boolean> {
+    // Build all label bitmaps upfront
+    const labels = batch.map(({ entry }) => this.buildLabelContentFromJob(entry.job));
+
+    let batchResult: { results: Array<{ success: boolean; error?: string }>; totalPrinted: number };
+
+    try {
+      batchResult = await this.printer.printNiimbotBatch(
+        printerName,
+        labels.map(l => ({ content: l.content, labelSize: l.labelSize as any })),
+      );
+    } catch (err: any) {
+      // Total failure (connection, init) — mark first job as error
+      const errorMsg = err.message || String(err);
+      console.error(`[Queue] Niimbot batch session failed: ${errorMsg}`);
+      this.handlePrintError(batch[0].jobId, batch[0].entry, printerName, errorMsg);
+      return false;
+    }
+
+    // Process per-page results
+    for (let i = 0; i < batch.length; i++) {
+      const { jobId, entry } = batch[i];
+      const pageResult = batchResult.results[i];
+      const isReprint = entry.apiKey === '__reprint__';
+
+      if (pageResult?.success) {
+        if (!isReprint) {
+          await this.api.ackJob(entry.apiKey, entry.job.id, 'printed').catch(console.error);
+        }
+        this.pendingJobs.delete(jobId);
+        this.store.removeFromPendingQueue(jobId);
+        this.store.incrementPrintedToday();
+
+        if (!isReprint) {
+          this.store.addHistoryEntry(this.buildHistoryEntry(entry.job, 'printed', null, entry.retries));
+        }
+      } else {
+        // Page failed — handle error for this and remaining jobs
+        const errorMsg = pageResult?.error || 'Unknown print failure';
+        console.error(`[Queue] Niimbot batch page ${i + 1}/${batch.length} failed: ${errorMsg}`);
+        this.handlePrintError(jobId, entry, printerName, errorMsg);
+        // Remaining pages were already skipped by printBitmapMultiPage
+        for (let j = i + 1; j < batch.length; j++) {
+          this.handlePrintError(batch[j].jobId, batch[j].entry, printerName, 'Skipped after previous page failure');
+        }
+        break;
+      }
+    }
+
+    if (batchResult.totalPrinted > 0) {
+      this.lastError = null;
+      this.clearOfflineState(printerName);
+      this.persistQueue();
+      console.log(`[Queue] Niimbot batch: ${batchResult.totalPrinted}/${batch.length} printed successfully`);
+    }
+
+    return batchResult.totalPrinted > 0;
+  }
+
+  /**
+   * Clear offline state for a printer and notify user.
+   */
+  private clearOfflineState(printerName: string): void {
+    if (this.offlinePrinters.has(printerName)) {
+      this.offlinePrinters.delete(printerName);
+      console.log(`[Queue] Printer "${printerName}" back online — spooled jobs resuming`);
+      new Notification({
+        title: 'Hou.la Print',
+        body: `Imprimante "${printerName}" reconnectée — reprise des impressions`,
+      }).show();
+    }
+  }
+
+  /**
+   * Handle a print error for a single job (transient vs fatal classification).
+   */
+  private handlePrintError(
+    jobId: string,
+    entry: { job: PrintJob; apiKey: string; retries: number },
+    printerName: string,
+    errorMsg: string,
+  ): void {
+    entry.retries++;
+
+    if (isTransientError(errorMsg)) {
+      const existing = this.offlinePrinters.get(printerName);
+      const retries = existing ? existing.retries + 1 : 1;
+      const delayIndex = Math.min(retries - 1, TRANSIENT_RETRY_DELAYS.length - 1);
+      const delay = TRANSIENT_RETRY_DELAYS[delayIndex];
+
+      this.offlinePrinters.set(printerName, {
+        since: existing?.since || new Date().toISOString(),
+        retries,
+        nextRetryAt: Date.now() + delay,
+      });
+
+      if (!existing) {
+        const spooled = this.countJobsForPrinter(printerName);
+        new Notification({
+          title: `Hou.la Print — ${printerName}`,
+          body: `Imprimante indisponible — ${spooled} impression${spooled > 1 ? 's' : ''} en attente`,
+        }).show();
+      }
+
+      this.lastError = `${printerName}: indisponible (tentative ${retries}, prochain essai dans ${Math.round(delay / 1000)}s)`;
+      this.store.updatePendingQueueItem(jobId, { retries: entry.retries });
+    } else {
+      if (entry.retries >= MAX_RETRIES) {
+        const isReprint = entry.apiKey === '__reprint__';
+        if (!isReprint) {
+          this.api.ackJob(entry.apiKey, entry.job.id, 'failed', errorMsg).catch(console.error);
+        }
+        this.pendingJobs.delete(jobId);
+        this.store.removeFromPendingQueue(jobId);
+        this.lastError = `Job ${jobId.substring(0, 8)} échoué: ${errorMsg}`;
+        this.store.incrementFailedToday();
+        this.store.addHistoryEntry(this.buildHistoryEntry(entry.job, 'failed', errorMsg, entry.retries));
+
+        new Notification({
+          title: 'Hou.la Print — Erreur',
+          body: `Impression échouée après ${MAX_RETRIES} tentatives: ${errorMsg.substring(0, 80)}`,
+        }).show();
+      } else {
+        this.lastError = `Tentative ${entry.retries}/${MAX_RETRIES}: ${errorMsg}`;
+        this.store.updatePendingQueueItem(jobId, { retries: entry.retries });
+      }
     }
   }
 
@@ -414,48 +649,7 @@ export class QueueService {
    * Converts the job payload into a label bitmap and sends via NIIMBOT protocol.
    */
   private async executeNiimbotPrint(job: PrintJob, printerName: string): Promise<void> {
-    const p = job.payload;
-
-    // Format price from cents if only priceCents is provided
-    const formatPrice = (cents: unknown, currency: unknown): string | undefined => {
-      if (typeof cents !== 'number') return undefined;
-      const cur = (currency as string) || 'EUR';
-      const val = (cents / 100).toFixed(2).replace('.', ',');
-      return cur === 'EUR' ? val + ' €' : val + ' ' + cur;
-    };
-
-    const content: LabelContent = {
-      // Product
-      productName: (p.productName as string) || (p.name as string) || 'Produit',
-      variant: (p.variant as string) || (p.variants as string) || undefined,
-      sku: (p.sku as string) || undefined,
-      price: (p.price as string) || formatPrice(p.priceCents, p.currency),
-      originalPrice: (p.originalPrice as string) || formatPrice(p.originalPriceCents, p.currency),
-      barcode: (p.barcode as string) || undefined,
-
-      // Order
-      orderId: (p.orderNumber as string) || (p.orderId as string) || undefined,
-      orderDate: (p.orderDate as string) || undefined,
-      orderTotal: (p.orderTotal as string) || (p.orderTotalFormatted as string) || undefined,
-      quantityFraction: buildQuantityFraction(p.quantityIndex, p.quantity),
-
-      // Customer
-      customerName: (p.customerName as string) || undefined,
-      socialHandle: (p.socialHandle as string) || undefined,
-      country: (p.country as string) || undefined,
-
-      // QR & Brand
-      qrCodeUrl: (p.qrCodeUrl as string) || undefined,
-      brandName: (p.brandName as string) || undefined,
-      websiteUrl: (p.websiteUrl as string) || undefined,
-    };
-
-    // Get label size: prefer printer's RFID-detected format, fallback to default
-    const printerFormat = this.store.getPrinterLabelFormat(printerName);
-    const labelSize = printerFormat
-      ? `${printerFormat.widthMm}x${printerFormat.heightMm}`
-      : '40x30';
-
+    const { content, labelSize } = this.buildLabelContentFromJob(job);
     await this.printer.printNiimbot(printerName, content, labelSize as any);
   }
 
@@ -608,6 +802,15 @@ export class QueueService {
    */
   private buildHistoryEntry(job: PrintJob, status: 'printed' | 'failed', error: string | null, attempts: number): PrintHistoryEntry {
     const p = job.payload || {};
+
+    // Format price from cents for display
+    const formatPrice = (cents: unknown, currency: unknown): string | undefined => {
+      if (typeof cents !== 'number') return undefined;
+      const cur = (currency as string) || 'EUR';
+      const val = (cents / 100).toFixed(2).replace('.', ',');
+      return cur === 'EUR' ? val + ' \u20ac' : val + ' ' + cur;
+    };
+
     return {
       id: `${job.id}-${Date.now()}`,
       jobId: job.id,
@@ -615,6 +818,10 @@ export class QueueService {
       type: job.type,
       status,
       productName: (p.productName as string) || (p.name as string) || job.type,
+      customerName: (p.customerName as string) || undefined,
+      socialHandle: (p.socialHandle as string) || undefined,
+      price: (p.price as string) || formatPrice(p.priceCents, p.currency),
+      orderDate: (p.orderDate as string) || undefined,
       error,
       attempts,
       timestamp: new Date().toISOString(),

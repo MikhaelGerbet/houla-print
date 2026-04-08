@@ -244,14 +244,15 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   const m = 6;
   const fullW = w - m * 2;
 
-  // ---- QR code layout (top-right corner) ----
+  // ---- QR code layout (top-right, padded to avoid print-area clipping) ----
   let qrSize = 0;
   let textW = fullW;
   if (c.qrCodeUrl && w >= 200) {
     const modSize = h >= 200 ? 3 : 2;
     qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, modSize);
-    const qrX = w - m - qrSize;
-    ctx.drawQrCode(c.qrCodeUrl, qrX, m, modSize);
+    const qrX = w - m - qrSize - 8;   // 8 dots from right edge
+    const qrY = m + 4;                 // 4 extra dots down from top
+    ctx.drawQrCode(c.qrCodeUrl, qrX, qrY, modSize);
     textW = qrX - m - 6;
   }
 
@@ -261,8 +262,8 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   const priceBarH = priceScale * 7 + 6;
   const availH = h - m * 2 - priceBarH;
 
-  // Adaptive text scales: try scale 2 for body, scale 3 for product name
-  // Fall back to scale 2 everywhere if tight, or scale 1 if very tight
+  // Adaptive text scales: body at scale 2, product name at scale 3
+  // Falls back progressively if content doesn't fit
   let bodyScale = 2;
   let nameScale = h >= 180 ? 3 : 2;
 
@@ -330,7 +331,7 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
 
   lines.push({ text: '__SEP__', scale: 0, bold: false });
 
-  // Customer — social handle + name at nameScale for readability
+  // Customer — social handle + name at nameScale (must be clearly readable)
   if (c.socialHandle) {
     lines.push({ text: truncate(c.socialHandle, maxCharsN), scale: nameScale, bold: true });
   }
@@ -380,17 +381,20 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     const px = m + fullW - pw;
     ctx.drawTextBold(c.price, px, bottomY + 2, priceScale);
 
-    // Strikethrough original price, scale bodyScale, just left of main price
+    // Strikethrough original price at same scale as the price text
     if (c.originalPrice && c.originalPrice !== c.price) {
-      const origW = c.originalPrice.length * 6 * bodyScale + 6;
-      const origY = bottomY + 2 + Math.floor((priceScale * 7 - bodyScale * 7) / 2);
-      ctx.drawTextStrikethrough(c.originalPrice, px - origW, origY, bodyScale);
+      const origScale = Math.max(priceScale - 1, 2);
+      const origW = c.originalPrice.length * 6 * origScale + 6;
+      const origY = bottomY + 2 + Math.floor((priceScale * 7 - origScale * 7) / 2);
+      ctx.drawTextStrikethrough(c.originalPrice, px - origW, origY, origScale);
     }
   }
 
   if (c.quantityFraction) {
-    const qtyY = bottomY + 2 + Math.floor((priceScale * 7 - bodyScale * 7) / 2);
-    ctx.drawText(c.quantityFraction, m, qtyY, bodyScale);
+    // Quantity at same scale as price for readability
+    const qtyScale = Math.max(priceScale - 1, 2);
+    const qtyY = bottomY + 2 + Math.floor((priceScale * 7 - qtyScale * 7) / 2);
+    ctx.drawTextBold(c.quantityFraction, m, qtyY, qtyScale);
   }
 }
 
@@ -401,36 +405,36 @@ function renderSmallLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
 function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: number): void {
   const m = 8;
 
-  // QR column on the right if URL provided
+  // QR column on the right if URL provided — padded to avoid print-area clipping
   const qrModuleSize = 3;
   let qrSize = 0;
   let textW = w - m * 2;
 
   if (c.qrCodeUrl && w >= 280) {
     qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, qrModuleSize);
-    const qrColW = qrSize + 8; // 8px gap
+    const qrColW = qrSize + 12; // generous gap so QR is not clipped
     textW = w - m - qrColW - 4;
-    const qrX = w - m - qrSize;
-    ctx.drawQrCode(c.qrCodeUrl, qrX, m, qrModuleSize);
+    const qrX = w - m - qrSize - 12;   // 12 dots from right edge
+    const qrY = m + 4;                  // 4 extra dots down from top
+    ctx.drawQrCode(c.qrCodeUrl, qrX, qrY, qrModuleSize);
   }
 
   const maxChars2 = Math.floor(textW / 12);
   const maxChars1 = Math.floor(textW / 6);
   let y = m;
 
-  // Header: brand on left, then order info below
+  // Header: brand (scale 1), order ID + date (scale 2 for readability)
   if (c.brandName) {
     ctx.drawText(c.brandName.toUpperCase(), m, y, 1);
     y += 10;
   }
-  // Order ID on its own line (bold), date+time below
   if (c.orderId) {
-    ctx.drawTextBold(truncate(c.orderId, maxChars1), m, y, 1);
-    y += 10;
+    ctx.drawTextBold(truncate(c.orderId, maxChars2), m, y, 2);
+    y += 18;
   }
   if (c.orderDate) {
-    ctx.drawText(truncate(c.orderDate, maxChars1), m, y, 1);
-    y += 10;
+    ctx.drawText(truncate(c.orderDate, maxChars2), m, y, 2);
+    y += 18;
   }
 
   // Separator
@@ -449,7 +453,7 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
     y += 16;
   }
 
-  // Product description (free-form, 1 line truncated, scale 1)
+  // Product description (scale 1, compact)
   if (c.productDescription) {
     ctx.drawText(truncate(c.productDescription, maxChars1), m, y, 1);
     y += 10;
@@ -472,7 +476,7 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
   ctx.hLine(m, y, textW, 1);
   y += 4;
 
-  // Customer info (scale 2 for social handle + name for readability)
+  // Customer info (scale 2 bold — must be easy to read for live sellers)
   if (c.socialHandle) {
     ctx.drawTextBold(truncate(c.socialHandle, maxChars2), m, y, 2);
     y += 18;
@@ -490,22 +494,22 @@ function renderStandardLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: n
   // Bottom section: price
   const bottomY = h - m;
 
-  // Price line (bold, scale 2, right-aligned with strikethrough just left of it)
+  // Price line (bold, scale 2, right-aligned with strikethrough at scale 2 just left of it)
   if (c.price) {
     const priceY = bottomY - 16;
     const priceW = c.price.length * 12; // scale 2 = 12px per char
     const priceX = m + textW - priceW;
     ctx.drawTextBold(c.price, priceX, priceY, 2);
 
-    // Strikethrough original price just left of the real price
+    // Strikethrough original price at scale 2 (legible)
     if (c.originalPrice && c.originalPrice !== c.price) {
-      const origW = c.originalPrice.length * 6 + 6;
-      ctx.drawTextStrikethrough(c.originalPrice, priceX - origW, priceY + 4, 1);
+      const origW = c.originalPrice.length * 12 + 6;
+      ctx.drawTextStrikethrough(c.originalPrice, priceX - origW, priceY, 2);
     }
 
-    // Quantity fraction at left
+    // Quantity fraction at left (scale 2 for readability)
     if (c.quantityFraction) {
-      ctx.drawTextRight(c.quantityFraction, m + textW, priceY + 4, 1);
+      ctx.drawTextBold(c.quantityFraction, m, priceY, 2);
     }
   }
 }
@@ -524,10 +528,11 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
 
   if (c.qrCodeUrl) {
     qrSize = BitmapCanvas.qrCodeSize(c.qrCodeUrl, qrModuleSize);
-    const qrColW = qrSize + 10;
+    const qrColW = qrSize + 14;       // generous gap
     textW = w - m - qrColW - 4;
-    const qrX = w - m - qrSize;
-    ctx.drawQrCode(c.qrCodeUrl, qrX, m, qrModuleSize);
+    const qrX = w - m - qrSize - 14;  // 14 dots from right edge
+    const qrY = m + 6;                // 6 extra dots down from top
+    ctx.drawQrCode(c.qrCodeUrl, qrX, qrY, qrModuleSize);
   }
 
   const maxChars2 = Math.floor(textW / 12);
@@ -543,14 +548,14 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     y += 6;
   }
 
-  // Order info — orderId on its own line, date+time below
+  // Order info — orderId and date at scale 2 for readability
   if (c.orderId) {
-    ctx.drawTextBold(truncate(c.orderId, maxChars1), m, y, 1);
-    y += 12;
+    ctx.drawTextBold(truncate(c.orderId, maxChars2), m, y, 2);
+    y += 18;
   }
   if (c.orderDate) {
-    ctx.drawText(truncate(c.orderDate, maxChars1), m, y, 1);
-    y += 12;
+    ctx.drawText(truncate(c.orderDate, maxChars2), m, y, 2);
+    y += 18;
   }
 
   // Separator
@@ -592,7 +597,7 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
   ctx.hLine(m, y, textW, 1);
   y += 6;
 
-  // Customer section (scale 2 for handle + name for live sales readability)
+  // Customer section (scale 2, bold — must be clearly readable for live sellers)
   if (c.socialHandle) {
     ctx.drawTextBold(truncate(c.socialHandle, maxChars2), m, y, 2);
     y += 18;
@@ -606,11 +611,11 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     y += 12;
   }
 
-  // Quantity fraction
+  // Quantity fraction (scale 2)
   if (c.quantityFraction) {
     y += 2;
-    ctx.drawText(c.quantityFraction, m, y, 1);
-    y += 12;
+    ctx.drawTextBold(c.quantityFraction, m, y, 2);
+    y += 18;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -626,11 +631,11 @@ function renderLargeLabel(ctx: BitmapCanvas, c: LabelContent, w: number, h: numb
     y += 8;
 
     if (c.originalPrice && c.originalPrice !== c.price) {
-      // Strikethrough original price centered
-      const origW = c.originalPrice.length * 6;
+      // Strikethrough original price centered at scale 2
+      const origW = c.originalPrice.length * 12;
       const origX = Math.floor((w - origW) / 2);
-      ctx.drawTextStrikethrough(c.originalPrice, origX, y, 1);
-      y += 12;
+      ctx.drawTextStrikethrough(c.originalPrice, origX, y, 2);
+      y += 18;
     }
 
     // Main price (bold, scale 4, centered)

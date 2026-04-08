@@ -81,9 +81,19 @@ function buildSizeOptions(extraSize) {
 
 let currentState = null;
 let testPrintInProgress = false;
+/** Entry IDs currently being reprinted — survives re-renders */
+const reprintingIds = new Set();
+/** Track printed count to detect when a reprint completes */
+let lastPrintedCount = -1;
 
 function updateUI(state) {
   currentState = state;
+
+  // Detect print completion: if printedTodayCount increased, clear reprinting spinners
+  if (lastPrintedCount >= 0 && state.printedTodayCount > lastPrintedCount && reprintingIds.size > 0) {
+    reprintingIds.clear();
+  }
+  lastPrintedCount = state.printedTodayCount;
 
   // Toggle views
   if (state.authenticated) {
@@ -611,8 +621,11 @@ function renderHistory(history) {
     const time = formatTime(entry.timestamp);
     const typeLabel = HISTORY_TYPE_LABELS[entry.type] || entry.type;
     const canReprint = !!(entry.payload || entry.labelData);
+    const isReprinting = reprintingIds.has(entry.id);
     const reprintBtn = canReprint
-      ? `<button class="btn btn-sm btn-ghost btn-reprint" data-reprint-id="${escapeAttr(entry.id)}" title="Réimprimer">🖨</button>`
+      ? (isReprinting
+        ? `<button class="btn btn-sm btn-ghost btn-reprint btn-reprint-loading" disabled><span class="spinner spinner-sm"></span></button>`
+        : `<button class="btn btn-sm btn-ghost btn-reprint" data-reprint-id="${escapeAttr(entry.id)}" title="R\u00e9imprimer">\ud83d\udda8</button>`)
       : '';
     const retryBtn = isError
       ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="Réessayer depuis l'API">↻</button>`
@@ -621,11 +634,35 @@ function renderHistory(history) {
       ? `<div class="history-error">${escapeHtml(entry.error)}</div>`
       : '';
 
+    // Build detail chips (customer, handle, price, order date)
+    // Read from top-level fields first, fallback to payload for old entries
+    const p = entry.payload || {};
+    const customerName = entry.customerName || p.customerName || '';
+    const socialHandle = entry.socialHandle || p.socialHandle || '';
+    const orderDate = entry.orderDate || p.orderDate || '';
+    // Price: top-level, or format from payload cents
+    let price = entry.price || p.price || '';
+    if (!price && typeof p.priceCents === 'number') {
+      const cur = p.currency || 'EUR';
+      const val = (p.priceCents / 100).toFixed(2).replace('.', ',');
+      price = cur === 'EUR' ? val + ' \u20ac' : val + ' ' + cur;
+    }
+
+    const details = [];
+    if (customerName) details.push(escapeHtml(customerName));
+    if (socialHandle) details.push('@' + escapeHtml(socialHandle));
+    if (price) details.push(escapeHtml(price));
+    if (orderDate) details.push(escapeHtml(orderDate));
+    const detailLine = details.length > 0
+      ? `<div class="history-detail">${details.join(' • ')}</div>`
+      : '';
+
     return `
       <div class="history-item ${statusClass}">
         <span class="history-status-icon">${statusIcon}</span>
         <div class="history-body">
           <div class="history-title">${escapeHtml(entry.productName)}</div>
+          ${detailLine}
           <div class="history-meta">${typeLabel} • ${time}${entry.attempts > 1 ? ' • ' + entry.attempts + ' tentatives' : ''}</div>
           ${errorLine}
         </div>
@@ -642,21 +679,28 @@ function renderHistory(history) {
     el.addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       const entryId = btn.dataset.reprintId;
+      // Add to persistent reprinting set so spinner survives re-renders
+      reprintingIds.add(entryId);
       btn.disabled = true;
-      btn.textContent = '…';
+      btn.innerHTML = '<span class="spinner spinner-sm"></span>';
+      btn.classList.add('btn-reprint-loading');
       try {
         const result = await api.reprintJob(entryId);
         if (result && !result.success) {
           console.error('[Renderer] Reprint failed:', result.error);
           showNotification(result.error || 'Erreur de réimpression', 'error');
+          reprintingIds.delete(entryId);
+          btn.disabled = false;
+          btn.innerHTML = '🖨';
+          btn.classList.remove('btn-reprint-loading');
         }
       } catch (err) {
         console.error('[Renderer] Reprint error:', err);
-      }
-      setTimeout(() => {
+        reprintingIds.delete(entryId);
         btn.disabled = false;
-        btn.textContent = '🖨';
-      }, 2000);
+        btn.innerHTML = '🖨';
+        btn.classList.remove('btn-reprint-loading');
+      }
     });
   });
 
@@ -683,11 +727,9 @@ function renderHistory(history) {
 function formatTime(isoString) {
   try {
     const d = new Date(isoString);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
+    const date = d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const time = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    if (sameDay) return time;
-    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' + time;
+    return date + ' ' + time;
   } catch {
     return '';
   }
