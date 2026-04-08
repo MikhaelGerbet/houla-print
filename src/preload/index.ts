@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('houlaPrint', {
   getQueueStats: () => ipcRenderer.invoke(IPC.QUEUE_STATS),
   retryAllFailed: () => ipcRenderer.invoke(IPC.QUEUE_RETRY_ALL),
   retryJob: (jobId: string) => ipcRenderer.invoke(IPC.QUEUE_RETRY_JOB, jobId),
+  reprintJob: (historyEntryId: string) => ipcRenderer.invoke(IPC.QUEUE_REPRINT_JOB, historyEntryId),
   getHistory: () => ipcRenderer.invoke(IPC.QUEUE_HISTORY),
   clearHistory: () => ipcRenderer.invoke(IPC.QUEUE_CLEAR_HISTORY),
 

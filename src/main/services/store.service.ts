@@ -2,7 +2,7 @@ import Store from 'electron-store';
 import { app, safeStorage } from 'electron';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { PrinterAssignments, PrintHistoryEntry, WorkspaceState } from '../../shared/types';
+import { PrinterAssignments, PrintHistoryEntry, WorkspaceState, PrintJob } from '../../shared/types';
 import { API_URLS, APP_URLS } from '../../shared/config';
 
 interface StoreSchema {
@@ -32,6 +32,9 @@ interface StoreSchema {
   failedTodayCount: number;
   failedTodayDate: string; // YYYY-MM-DD — reset daily
 
+  // Persistent pending queue (survives app restarts / printer offline)
+  pendingQueue: Array<{ job: PrintJob; apiKey: string; retries: number; spooledAt: string }>;
+
   // App settings
   apiUrl: string;
   appUrl: string;
@@ -55,6 +58,7 @@ const STORE_DEFAULTS: StoreSchema = {
   printHistory: [],
   failedTodayCount: 0,
   failedTodayDate: new Date().toISOString().split('T')[0],
+  pendingQueue: [],
   apiUrl: API_URLS.production,
   appUrl: APP_URLS.production,
   env: 'production',
@@ -307,5 +311,40 @@ export class StoreService {
       return 0;
     }
     return this.store.get('failedTodayCount');
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Persistent pending queue (survives restart / printer offline)
+  // ═══════════════════════════════════════════════════════
+
+  getPendingQueue(): Array<{ job: PrintJob; apiKey: string; retries: number; spooledAt: string }> {
+    return this.store.get('pendingQueue') || [];
+  }
+
+  setPendingQueue(items: Array<{ job: PrintJob; apiKey: string; retries: number; spooledAt: string }>): void {
+    this.store.set('pendingQueue', items);
+  }
+
+  addToPendingQueue(item: { job: PrintJob; apiKey: string; retries: number; spooledAt: string }): void {
+    const queue = this.getPendingQueue();
+    // Avoid duplicates
+    if (!queue.some(q => q.job.id === item.job.id)) {
+      queue.push(item);
+      this.store.set('pendingQueue', queue);
+    }
+  }
+
+  removeFromPendingQueue(jobId: string): void {
+    const queue = this.getPendingQueue().filter(q => q.job.id !== jobId);
+    this.store.set('pendingQueue', queue);
+  }
+
+  updatePendingQueueItem(jobId: string, updates: Partial<{ retries: number }>): void {
+    const queue = this.getPendingQueue();
+    const item = queue.find(q => q.job.id === jobId);
+    if (item) {
+      if (updates.retries !== undefined) item.retries = updates.retries;
+      this.store.set('pendingQueue', queue);
+    }
   }
 }

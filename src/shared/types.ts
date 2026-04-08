@@ -94,6 +94,12 @@ export interface PrintHistoryEntry {
   error: string | null;
   attempts: number;
   timestamp: string; // ISO 8601
+  /** Original job payload (product/order details) — needed for reprint */
+  payload?: Record<string, unknown>;
+  /** Label format used for printing */
+  labelFormat?: PrintLabelFormat;
+  /** Raw label data (ZPL/ESC-POS text) — stored for reprint. Omitted for Niimbot (re-rendered from payload). */
+  labelData?: string | null;
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'no-workspace' | 'error';
@@ -109,6 +115,7 @@ export interface AppState {
   pendingJobsCount: number;
   printedTodayCount: number;
   failedTodayCount: number;
+  offlinePrinters: Array<{ printerName: string; since: string; spooledCount: number }>;
   printHistory: PrintHistoryEntry[];
   lastError: string | null;
   env: 'production' | 'development';
@@ -144,6 +151,7 @@ export const IPC = {
   QUEUE_STATS: 'queue:stats',
   QUEUE_RETRY_ALL: 'queue:retry-all',
   QUEUE_RETRY_JOB: 'queue:retry-job',
+  QUEUE_REPRINT_JOB: 'queue:reprint-job',
   QUEUE_HISTORY: 'queue:history',
   QUEUE_CLEAR_HISTORY: 'queue:clear-history',
 

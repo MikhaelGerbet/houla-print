@@ -32,6 +32,7 @@ const $assignmentList = document.getElementById('assignment-list');
 const $labelSizeList = document.getElementById('label-size-list');
 const $labelPreviewSection = document.getElementById('section-label-preview');
 const $labelPreviewImg = document.getElementById('label-preview-img');
+const $offlineBanners = document.getElementById('offline-banners');
 const $errorBanner = document.getElementById('error-banner');
 const $errorText = document.getElementById('error-text');
 const $envBadge = document.getElementById('env-badge');
@@ -131,6 +132,26 @@ function updateUI(state) {
   }
   $settingEnv.textContent = state.env || 'production';
   $settingApiUrl.textContent = state.apiUrl || '—';
+
+  // Offline printer banners (one per offline printer)
+  const offlinePrinters = state.offlinePrinters || [];
+  if (offlinePrinters.length > 0) {
+    $offlineBanners.innerHTML = offlinePrinters.map(p => {
+      const mins = Math.floor((Date.now() - new Date(p.since).getTime()) / 60000);
+      const timeStr = mins < 1 ? '\u00e0 l\'instant' : `depuis ${mins} min`;
+      const plural = p.spooledCount > 1 ? 's' : '';
+      return `<div class="offline-banner">
+        <span class="offline-banner-icon">\u26a0</span>
+        <div class="offline-banner-body">
+          <strong>${escapeHtml(p.printerName)} — hors ligne</strong>
+          <span>${p.spooledCount} t\u00e2che${plural} en attente — reprise auto d\u00e8s reconnexion</span>
+        </div>
+        <span class="offline-banner-since">${escapeHtml(timeStr)}</span>
+      </div>`;
+    }).join('');
+  } else {
+    $offlineBanners.innerHTML = '';
+  }
 
   // Error banner
   if (state.lastError) {
@@ -589,8 +610,12 @@ function renderHistory(history) {
     const statusClass = isError ? 'history-failed' : 'history-success';
     const time = formatTime(entry.timestamp);
     const typeLabel = HISTORY_TYPE_LABELS[entry.type] || entry.type;
+    const canReprint = !!(entry.payload || entry.labelData);
+    const reprintBtn = canReprint
+      ? `<button class="btn btn-sm btn-ghost btn-reprint" data-reprint-id="${escapeAttr(entry.id)}" title="Réimprimer">🖨</button>`
+      : '';
     const retryBtn = isError
-      ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="Réessayer">↻</button>`
+      ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="Réessayer depuis l'API">↻</button>`
       : '';
     const errorLine = isError && entry.error
       ? `<div class="history-error">${escapeHtml(entry.error)}</div>`
@@ -604,10 +629,36 @@ function renderHistory(history) {
           <div class="history-meta">${typeLabel} • ${time}${entry.attempts > 1 ? ' • ' + entry.attempts + ' tentatives' : ''}</div>
           ${errorLine}
         </div>
-        ${retryBtn}
+        <div class="history-actions">
+          ${reprintBtn}
+          ${retryBtn}
+        </div>
       </div>
     `;
   }).join('');
+
+  // Bind reprint buttons
+  $historyList.querySelectorAll('[data-reprint-id]').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const entryId = btn.dataset.reprintId;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const result = await api.reprintJob(entryId);
+        if (result && !result.success) {
+          console.error('[Renderer] Reprint failed:', result.error);
+          showNotification(result.error || 'Erreur de réimpression', 'error');
+        }
+      } catch (err) {
+        console.error('[Renderer] Reprint error:', err);
+      }
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = '🖨';
+      }, 2000);
+    });
+  });
 
   // Bind retry buttons
   $historyList.querySelectorAll('[data-retry-job]').forEach(el => {
