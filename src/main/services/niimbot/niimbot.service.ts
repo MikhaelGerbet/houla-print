@@ -61,6 +61,8 @@ export class NiimbotService {
   private connected = false;
   /** True when connected via Bluetooth SPP (slower pacing needed) */
   private isBluetooth = false;
+  /** Heartbeat interval to prevent printer from sleeping */
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
   /** Mutex: true while a probe, connect, or print is actively using a serial port */
   private busy = false;
@@ -165,11 +167,13 @@ export class NiimbotService {
       this.port.on('error', (err) => {
         console.error('[Niimbot] Serial error:', err.message);
         this.connected = false;
+        this.stopHeartbeat();
       });
 
       this.port.on('close', () => {
         console.log('[Niimbot] Port closed.');
         this.connected = false;
+        this.stopHeartbeat();
       });
 
       this.busy = true;
@@ -200,6 +204,7 @@ export class NiimbotService {
           // Send CONNECT command and wait for ACK
           await this.sendAndWait(connectPkt, NiimbotResponse.CONNECT_ACK, 5000);
           this.connected = true;
+          this.startHeartbeat();
           console.log('[Niimbot] Connected to printer.');
           resolve();
         } catch (connErr: any) {
@@ -215,6 +220,7 @@ export class NiimbotService {
    * Disconnect from the printer.
    */
   async disconnect(): Promise<void> {
+    this.stopHeartbeat();
     this.connected = false;
     this.busy = false;
     if (!this.port?.isOpen) return;
@@ -229,6 +235,33 @@ export class NiimbotService {
 
   isConnected(): boolean {
     return this.connected && (this.port?.isOpen ?? false);
+  }
+
+  /**
+   * Start periodic heartbeat to prevent printer from entering sleep mode.
+   * Sends a heartbeat command every 30 seconds.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(async () => {
+      if (!this.isConnected() || this.busy) return;
+      try {
+        const pkt = buildHeartbeat();
+        this.port!.write(pkt);
+      } catch (err: any) {
+        console.warn(`[Niimbot] Heartbeat failed: ${err.message}`);
+      }
+    }, 30_000);
+  }
+
+  /**
+   * Stop the heartbeat timer.
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   /**

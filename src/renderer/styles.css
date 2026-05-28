@@ -564,6 +564,14 @@ body {
   gap: 10px;
 }
 
+.zpl-config-body .config-row > label {
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  text-align: left;
+}
+
 .zpl-config-body select {
   background: var(--bg-card);
   color: var(--text);
@@ -1112,6 +1120,8 @@ body {
 .config-row {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  text-align: left;
   gap: 4px;
 }
 

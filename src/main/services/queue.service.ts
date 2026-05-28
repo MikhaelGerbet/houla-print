@@ -713,6 +713,9 @@ export class QueueService {
    * Retry all failed jobs (re-enqueue).
    */
   async retryAllFailed(): Promise<void> {
+    // Clear offline cooldown so printers are retried immediately
+    this.offlinePrinters.clear();
+
     // Failed jobs were already removed — this retries by re-fetching from API
     const workspaces = this.store.getWorkspaces();
     for (const [wsId, wsData] of Object.entries(workspaces)) {
