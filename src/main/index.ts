@@ -225,6 +225,7 @@ function detectEnv(): 'production' | 'development' {
   // CLI flag takes precedence
   if (process.argv.includes('--dev')) return 'development';
   // NODE_ENV from environment
+  if (process.env.NODE_ENV === 'production') return 'production';
   if (process.env.NODE_ENV === 'development') return 'development';
   // Electron: app.isPackaged is false when running via `electron .`
   if (!app.isPackaged) return 'development';

@@ -1,0 +1,47 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Houla Print: Dev (API locale)",
+			"type": "shell",
+			"command": "npm",
+			"args": ["run", "dev"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Houla Print: Dev (API Prod)",
+			"type": "shell",
+			"command": "npm",
+			"args": ["run", "build"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"dependsOrder": "sequence",
+			"dependsOn": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "Houla Print: Start Prod Mode",
+			"type": "shell",
+			"command": "npx",
+			"args": ["electron", "dist/main/index.js"],
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"NODE_ENV": "production"
+				}
+			},
+			"isBackground": true,
+			"problemMatcher": [],
+			"dependsOn": "Houla Print: Dev (API Prod)"
+		}
+	]
+}
