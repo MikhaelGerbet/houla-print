@@ -62,7 +62,10 @@ jobs:
       # Do not cancel the Windows build if the macOS build fails.
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Pin Windows to 2022: node-gyp 9.x cannot detect the Visual Studio
+        # install on the newer windows-latest (Server 2025) image, breaking the
+        # native-module rebuild (@serialport/bindings-cpp, better-sqlite3).
+        os: [windows-2022, macos-latest]
     steps:
       - name: Determine tag
         id: tag
