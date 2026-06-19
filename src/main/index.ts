@@ -376,7 +376,7 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle(IPC.PRINTER_TEST, async (_e, printerName: string) => {
     const zplConfig = store.getPrinterZplConfig(printerName);
-    const result = await printer.testPrint(printerName, zplConfig);
+    const result = await printer.testPrint(printerName, zplConfig, store.getLanguage());
     // Save RFID-detected label format for this printer
     if ((result as any).detectedLabel) {
       const dl = (result as any).detectedLabel;
@@ -436,6 +436,18 @@ function registerIpcHandlers(): void {
     broadcastState();
   });
 
+  // Language
+  ipcMain.handle(IPC.GET_LANGUAGE, () => store.getLanguage());
+  ipcMain.handle(IPC.SET_LANGUAGE, (_e, language: string) => {
+    if (isLanguage(language)) {
+      store.setLanguage(language);
+      // Rebuild tray so its menu/tooltip reflect the new language
+      createTray();
+      broadcastState();
+    }
+    return store.getLanguage();
+  });
+
   // App
   ipcMain.on(IPC.APP_QUIT, () => app.exit(0));
   ipcMain.on(IPC.APP_MINIMIZE, () => mainWindow?.hide());
@@ -477,6 +489,7 @@ function getAppState(): AppState {
     env: store.getEnv(),
     apiUrl: store.getApiUrl(),
     appUrl: store.getAppUrl(),
+    language: store.getLanguage(),
     printerLabelFormats: store.getAllPrinterLabelFormats(),
     printerZplConfigs: store.getAllPrinterZplConfigs(),
   };
@@ -519,7 +532,7 @@ function handleDeepLink(url: string): void {
     console.error('OAuth callback error:', err);
     new Notification({
       title: APP_NAME,
-      body: 'Erreur de connexion. Veuillez réessayer.',
+      body: tr('notif.oauth-error'),
     }).show();
   });
 }

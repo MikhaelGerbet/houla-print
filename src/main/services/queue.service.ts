@@ -4,6 +4,7 @@ import { ApiService } from './api.service';
 import { PrinterService } from './printer.service';
 import { PrintJob, PrintHistoryEntry, WorkspaceState } from '../../shared/types';
 import { LabelContent } from './niimbot';
+import { t } from '../../shared/i18n';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [2000, 5000, 15000]; // ms — for fatal errors only
@@ -81,6 +82,11 @@ export class QueueService {
     this.timer = setInterval(() => this.processNext(), 2000);
   }
 
+  /** Translate using the currently stored UI language. */
+  private tr(key: string, vars?: Record<string, string | number>): string {
+    return t(key, this.store.getLanguage(), vars);
+  }
+
   /**
    * Restore pending jobs from persistent storage (survives app restarts).
    */
@@ -103,8 +109,8 @@ export class QueueService {
     if (restored > 0) {
       console.log(`[Queue] Restored ${restored} pending job(s) from persistent storage`);
       new Notification({
-        title: 'Hou.la Print',
-        body: `${restored} impression${restored > 1 ? 's' : ''} en attente restaurée${restored > 1 ? 's' : ''}`,
+        title: this.tr('app.name'),
+        body: this.tr('notif.queue-restored', { count: restored, plural: restored > 1 ? 's' : '' }),
       }).show();
     }
   }
@@ -167,8 +173,8 @@ export class QueueService {
       console.log(`[Queue] Enqueued ${newCount} new job(s) (total pending: ${this.pendingJobs.size})`);
       this.persistQueue(); // Save to disk immediately
       new Notification({
-        title: 'Hou.la Print',
-        body: `${newCount} nouveau${newCount > 1 ? 'x' : ''} job${newCount > 1 ? 's' : ''} d'impression`,
+        title: this.tr('app.name'),
+        body: this.tr('notif.new-jobs', { count: newCount, pluralX: newCount > 1 ? 'x' : '', plural: newCount > 1 ? 's' : '' }),
       }).show();
       this.onStateChange?.();
       // Trigger immediate processing instead of waiting for 2s timer
@@ -344,8 +350,8 @@ export class QueueService {
         if (!existing) {
           const spooled = this.countJobsForPrinter(printerName);
           new Notification({
-            title: `Hou.la Print — ${printerName}`,
-            body: `Imprimante indisponible — ${spooled} impression${spooled > 1 ? 's' : ''} en attente`,
+            title: `${this.tr('app.name')} — ${printerName}`,
+            body: this.tr('notif.printer-offline', { count: spooled, plural: spooled > 1 ? 's' : '' }),
           }).show();
         }
 
@@ -362,14 +368,14 @@ export class QueueService {
           }
           this.pendingJobs.delete(jobId);
           this.store.removeFromPendingQueue(jobId);
-          this.lastError = `Job ${jobId.substring(0, 8)} échoué: ${errorMsg}`;
+          this.lastError = this.tr('error.job-failed', { jobId: jobId.substring(0, 8), error: errorMsg });
           this.store.incrementFailedToday();
 
           this.store.addHistoryEntry(this.buildHistoryEntry(job, 'failed', errorMsg, entry.retries));
 
           new Notification({
-            title: 'Hou.la Print — Erreur',
-            body: `Impression échouée après ${MAX_RETRIES} tentatives: ${errorMsg.substring(0, 80)}`,
+            title: this.tr('notif.print-failed.title'),
+            body: this.tr('notif.print-failed.body', { attempts: MAX_RETRIES, error: errorMsg.substring(0, 80) }),
           }).show();
         } else {
           const delay = RETRY_DELAYS[entry.retries - 1] || 15000;
@@ -538,8 +544,8 @@ export class QueueService {
       this.offlinePrinters.delete(printerName);
       console.log(`[Queue] Printer "${printerName}" back online — spooled jobs resuming`);
       new Notification({
-        title: 'Hou.la Print',
-        body: `Imprimante "${printerName}" reconnectée — reprise des impressions`,
+        title: this.tr('app.name'),
+        body: this.tr('notif.printer-reconnected', { printer: printerName }),
       }).show();
     }
   }
@@ -570,8 +576,8 @@ export class QueueService {
       if (!existing) {
         const spooled = this.countJobsForPrinter(printerName);
         new Notification({
-          title: `Hou.la Print — ${printerName}`,
-          body: `Imprimante indisponible — ${spooled} impression${spooled > 1 ? 's' : ''} en attente`,
+          title: `${this.tr('app.name')} — ${printerName}`,
+          body: this.tr('notif.printer-offline', { count: spooled, plural: spooled > 1 ? 's' : '' }),
         }).show();
       }
 
@@ -585,13 +591,13 @@ export class QueueService {
         }
         this.pendingJobs.delete(jobId);
         this.store.removeFromPendingQueue(jobId);
-        this.lastError = `Job ${jobId.substring(0, 8)} échoué: ${errorMsg}`;
+        this.lastError = this.tr('error.job-failed', { jobId: jobId.substring(0, 8), error: errorMsg });
         this.store.incrementFailedToday();
         this.store.addHistoryEntry(this.buildHistoryEntry(entry.job, 'failed', errorMsg, entry.retries));
 
         new Notification({
-          title: 'Hou.la Print — Erreur',
-          body: `Impression échouée après ${MAX_RETRIES} tentatives: ${errorMsg.substring(0, 80)}`,
+          title: this.tr('notif.print-failed.title'),
+          body: this.tr('notif.print-failed.body', { attempts: MAX_RETRIES, error: errorMsg.substring(0, 80) }),
         }).show();
       } else {
         this.lastError = `Tentative ${entry.retries}/${MAX_RETRIES}: ${errorMsg}`;
@@ -799,16 +805,16 @@ export class QueueService {
   async reprintJob(historyEntryId: string): Promise<{ success: boolean; error?: string }> {
     const history = this.store.getHistory();
     const entry = history.find(h => h.id === historyEntryId);
-    if (!entry) return { success: false, error: 'Entrée introuvable dans l\'historique' };
+    if (!entry) return { success: false, error: this.tr('error.history-entry-not-found') };
 
     if (!entry.payload && !entry.labelData) {
-      return { success: false, error: 'Données d\'impression manquantes — impossible de réimprimer' };
+      return { success: false, error: this.tr('error.reprint-data-missing') };
     }
 
     const workspaces = this.store.getWorkspaces();
     const wsData = workspaces[entry.workspaceId];
     if (!wsData?.apiKey) {
-      return { success: false, error: 'Workspace non connecté' };
+      return { success: false, error: this.tr('error.workspace-not-connected') };
     }
 
     // Build a synthetic PrintJob from history data

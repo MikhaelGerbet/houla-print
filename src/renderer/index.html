@@ -19,8 +19,8 @@
       <span class="env-badge hidden" id="env-badge">DEV</span>
     </div>
     <div class="titlebar-actions">
-      <button class="titlebar-btn" id="btn-minimize" title="Réduire">─</button>
-      <button class="titlebar-btn titlebar-close" id="btn-close" title="Fermer">✕</button>
+      <button class="titlebar-btn" id="btn-minimize" data-i18n-title="titlebar.minimize" title="Réduire">─</button>
+      <button class="titlebar-btn titlebar-close" id="btn-close" data-i18n-title="titlebar.close" title="Fermer">✕</button>
     </div>
   </header>
 
@@ -32,12 +32,12 @@
       <div class="login-hero">
         <img src="../assets/icon.png" alt="Hou.la Print" class="login-logo">
         <h1>Hou.la Print</h1>
-        <p>Impression automatique de vos étiquettes produits, factures et bordereaux dès qu'une commande est payée.</p>
+        <p data-i18n="login.tagline">Impression automatique de vos étiquettes produits, factures et bordereaux dès qu'une commande est payée.</p>
       </div>
-      <button class="btn btn-primary btn-lg" id="btn-login">
+      <button class="btn btn-primary btn-lg" id="btn-login" data-i18n="login.button">
         Se connecter avec Hou.la
       </button>
-      <p class="login-hint">Connectez-vous pour lier vos boutiques</p>
+      <p class="login-hint" data-i18n="login.hint">Connectez-vous pour lier vos boutiques</p>
     </section>
 
     <!-- === DASHBOARD VIEW === -->
@@ -60,48 +60,48 @@
 
       <!-- Tabs -->
       <nav class="tabs">
-        <button class="tab active" data-tab="workspaces">Boutiques</button>
-        <button class="tab" data-tab="printers">Imprimantes</button>
-        <button class="tab" data-tab="history">Historique</button>
-        <button class="tab" data-tab="settings">Paramètres</button>
+        <button class="tab active" data-tab="workspaces" data-i18n="tab.workspaces">Boutiques</button>
+        <button class="tab" data-tab="printers" data-i18n="tab.printers">Imprimantes</button>
+        <button class="tab" data-tab="history" data-i18n="tab.history">Historique</button>
+        <button class="tab" data-tab="settings" data-i18n="tab.settings">Paramètres</button>
       </nav>
 
       <!-- Tab: Workspaces -->
       <div class="tab-panel active" id="panel-workspaces">
         <div class="panel-header">
-          <h2>Vos boutiques</h2>
-          <button class="btn btn-sm btn-ghost" id="btn-refresh-workspaces">↻ Rafraîchir</button>
+          <h2 data-i18n="workspaces.title">Vos boutiques</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-refresh-workspaces" data-i18n="workspaces.refresh">↻ Rafraîchir</button>
         </div>
         <div class="workspace-list" id="workspace-list">
-          <div class="loading-state"><span class="spinner"></span> Chargement…</div>
+          <div class="loading-state"><span class="spinner"></span> <span data-i18n="workspaces.loading">Chargement…</span></div>
         </div>
       </div>
 
       <!-- Tab: Printers -->
       <div class="tab-panel hidden" id="panel-printers">
         <div class="panel-header">
-          <h2>Imprimantes</h2>
-          <button class="btn btn-sm btn-ghost" id="btn-refresh-printers">↻ Détecter</button>
+          <h2 data-i18n="printers.title">Imprimantes</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-refresh-printers" data-i18n="printers.detect">↻ Détecter</button>
         </div>
 
         <!-- Detected printers -->
         <div class="section">
-          <h3>Imprimantes détectées</h3>
+          <h3 data-i18n="printers.detected-title">Imprimantes détectées</h3>
           <div class="printer-list" id="printer-list">
-            <div class="loading-state"><span class="spinner"></span> Détection…</div>
+            <div class="loading-state"><span class="spinner"></span> <span data-i18n="printers.detecting">Détection…</span></div>
           </div>
         </div>
 
         <!-- Printer assignments — tabbed by job type -->
         <div class="section">
-          <h3>Configuration des impressions</h3>
-          <p class="section-hint">Chaque type d'impression se déclenche automatiquement lorsqu'une vente est réalisée (live, marketplace, gachapon). Configurez l'imprimante, le format et consultez l'aperçu pour chaque type.</p>
+          <h3 data-i18n="printers.config-title">Configuration des impressions</h3>
+          <p class="section-hint" data-i18n="printers.config-hint">Chaque type d'impression se déclenche automatiquement lorsqu'une vente est réalisée (live, marketplace, gachapon). Configurez l'imprimante, le format et consultez l'aperçu pour chaque type.</p>
 
           <nav class="sub-tabs">
-            <button class="sub-tab active" data-jobtab="product_label">Étiquettes produits</button>
-            <button class="sub-tab" data-jobtab="shipping_label">Étiquette expédition</button>
-            <button class="sub-tab" data-jobtab="order_summary">Récapitulatif</button>
-            <button class="sub-tab" data-jobtab="invoice">Facture</button>
+            <button class="sub-tab active" data-jobtab="product_label" data-i18n="jobtab.product_label">Étiquettes produits</button>
+            <button class="sub-tab" data-jobtab="shipping_label" data-i18n="jobtab.shipping_label">Étiquette expédition</button>
+            <button class="sub-tab" data-jobtab="order_summary" data-i18n="jobtab.order_summary">Récapitulatif</button>
+            <button class="sub-tab" data-jobtab="invoice" data-i18n="jobtab.invoice">Facture</button>
           </nav>
 
           <!-- Sub-panel: Product labels -->
@@ -109,28 +109,28 @@
             <div class="job-description">
               <span class="job-icon">🏷️</span>
               <div>
-                <strong>Étiquettes produits</strong>
-                <p>Imprimées automatiquement à chaque vente. Chaque article de la commande génère une étiquette avec le nom du produit, la variante, le prix, le nom du client et un QR code. Idéal pour identifier les colis avant expédition.</p>
+                <strong data-i18n="job.product_label.title">Étiquettes produits</strong>
+                <p data-i18n="job.product_label.desc">Imprimées automatiquement à chaque vente. Chaque article de la commande génère une étiquette avec le nom du produit, la variante, le prix, le nom du client et un QR code. Idéal pour identifier les colis avant expédition.</p>
               </div>
             </div>
             <div class="job-config">
               <div class="config-row">
-                <label>Imprimante</label>
+                <label data-i18n="config.printer">Imprimante</label>
                 <select class="assignment-select" data-job-assign="product_label">
-                  <option value="">Non assignée</option>
+                  <option value="" data-i18n="config.unassigned">Non assignée</option>
                 </select>
               </div>
               <div class="config-row">
-                <label>Format d'étiquette</label>
+                <label data-i18n="config.label-format">Format d'étiquette</label>
                 <div id="job-label-size-product_label" class="label-size-list"></div>
               </div>
               <div class="config-row config-preview">
-                <label>Aperçu</label>
+                <label data-i18n="config.preview">Aperçu</label>
                 <div class="label-preview" id="job-preview-product_label" style="display:none">
                   <div class="label-preview-img-wrap">
-                    <img id="job-preview-img-product_label" alt="Aperçu étiquette produit">
+                    <img id="job-preview-img-product_label" data-i18n-alt="config.preview.alt" alt="Aperçu étiquette produit">
                   </div>
-                  <div class="label-preview-hint">Données fictives — rendu réel identique</div>
+                  <div class="label-preview-hint" data-i18n="config.preview.hint">Données fictives — rendu réel identique</div>
                 </div>
               </div>
             </div>
@@ -141,56 +141,56 @@
             <div class="job-description">
               <span class="job-icon">📦</span>
               <div>
-                <strong>Étiquette d'expédition</strong>
-                <p>Imprimée automatiquement lorsque la commande passe en « Préparation ». Contient l'adresse du client et les informations transporteur. Format standard 100×150 mm (6×4").</p>
+                <strong data-i18n="job.shipping_label.title">Étiquette d'expédition</strong>
+                <p data-i18n="job.shipping_label.desc">Imprimée automatiquement lorsque la commande passe en « Préparation ». Contient l'adresse du client et les informations transporteur. Format standard 100×150 mm (6×4").</p>
               </div>
             </div>
             <div class="job-config">
               <div class="config-row">
-                <label>Imprimante</label>
+                <label data-i18n="config.printer">Imprimante</label>
                 <select class="assignment-select" data-job-assign="shipping_label">
-                  <option value="">Non assignée</option>
+                  <option value="" data-i18n="config.unassigned">Non assignée</option>
                 </select>
               </div>
               <div class="config-row">
-                <label>Format</label>
-                <span class="config-value">100 × 150 mm (A6 / 6×4") — Standard expédition</span>
+                <label data-i18n="config.format">Format</label>
+                <span class="config-value" data-i18n="config.shipping.format-value">100 × 150 mm (A6 / 6×4") — Standard expédition</span>
               </div>
 
               <!-- Advanced ZPL config (shown when a thermal printer is assigned) -->
               <div class="zpl-config-section hidden" id="zpl-config-section">
-                <button class="btn btn-sm btn-ghost zpl-config-toggle" id="btn-zpl-config-toggle">
+                <button class="btn btn-sm btn-ghost zpl-config-toggle" id="btn-zpl-config-toggle" data-i18n="zpl.advanced">
                   ⚙️ Configuration avancée ▸
                 </button>
                 <div class="zpl-config-body hidden" id="zpl-config-body">
                   <div class="config-row">
-                    <label>Mode d'impression</label>
+                    <label data-i18n="zpl.mode">Mode d'impression</label>
                     <select id="zpl-config-mode">
-                      <option value="auto">Auto (détection par nom)</option>
-                      <option value="zpl">ZPL direct (raw)</option>
-                      <option value="driver">Driver Windows</option>
+                      <option value="auto" data-i18n="zpl.mode.auto">Auto (détection par nom)</option>
+                      <option value="zpl" data-i18n="zpl.mode.zpl">ZPL direct (raw)</option>
+                      <option value="driver" data-i18n="zpl.mode.driver">Driver Windows</option>
                     </select>
                   </div>
                   <div class="config-row">
-                    <label>Résolution (DPI)</label>
+                    <label data-i18n="zpl.dpi">Résolution (DPI)</label>
                     <select id="zpl-config-dpi">
-                      <option value="203">203 DPI — Standard (MHT, Xprinter, budget)</option>
-                      <option value="300">300 DPI — Zebra industrielle</option>
+                      <option value="203" data-i18n="zpl.dpi.203">203 DPI — Standard (MHT, Xprinter, budget)</option>
+                      <option value="300" data-i18n="zpl.dpi.300">300 DPI — Zebra industrielle</option>
                     </select>
                   </div>
                   <div class="config-row">
-                    <label>Échelle</label>
+                    <label data-i18n="zpl.scale">Échelle</label>
                     <div class="scale-control">
                       <input type="range" id="zpl-config-scale" min="0.70" max="1.00" step="0.01" value="0.90">
                       <span id="zpl-config-scale-value" class="scale-value">90%</span>
                     </div>
                   </div>
                   <div class="config-row config-hint">
-                    <small>💡 Ajustez l'échelle si l'étiquette est coupée sur les bords. 90% convient à la plupart des imprimantes.</small>
+                    <small data-i18n="zpl.scale-hint">💡 Ajustez l'échelle si l'étiquette est coupée sur les bords. 90% convient à la plupart des imprimantes.</small>
                   </div>
                   <div class="config-row config-actions">
-                    <button class="btn btn-sm btn-primary" id="btn-zpl-config-save">Enregistrer</button>
-                    <button class="btn btn-sm btn-ghost" id="btn-zpl-test-print">🖨️ Impression test</button>
+                    <button class="btn btn-sm btn-primary" id="btn-zpl-config-save" data-i18n="zpl.save">Enregistrer</button>
+                    <button class="btn btn-sm btn-ghost" id="btn-zpl-test-print" data-i18n="zpl.test-print">🖨️ Impression test</button>
                   </div>
                 </div>
               </div>
@@ -202,20 +202,20 @@
             <div class="job-description">
               <span class="job-icon">🧾</span>
               <div>
-                <strong>Récapitulatif de commande</strong>
-                <p>Imprimé automatiquement dès qu'une commande est payée. Récapitule tous les articles, les prix, le total et les informations du client. Imprimé sur ticket thermique (ESC/POS) ou en PDF selon l'imprimante assignée.</p>
+                <strong data-i18n="job.order_summary.title">Récapitulatif de commande</strong>
+                <p data-i18n="job.order_summary.desc">Imprimé automatiquement dès qu'une commande est payée. Récapitule tous les articles, les prix, le total et les informations du client. Imprimé sur ticket thermique (ESC/POS) ou en PDF selon l'imprimante assignée.</p>
               </div>
             </div>
             <div class="job-config">
               <div class="config-row">
-                <label>Imprimante</label>
+                <label data-i18n="config.printer">Imprimante</label>
                 <select class="assignment-select" data-job-assign="order_summary">
-                  <option value="">Non assignée</option>
+                  <option value="" data-i18n="config.unassigned">Non assignée</option>
                 </select>
               </div>
               <div class="config-row">
-                <label>Format</label>
-                <span class="config-value">Ticket 80 mm ou PDF A4 — selon l'imprimante</span>
+                <label data-i18n="config.format">Format</label>
+                <span class="config-value" data-i18n="config.order_summary.format-value">Ticket 80 mm ou PDF A4 — selon l'imprimante</span>
               </div>
             </div>
           </div>
@@ -225,20 +225,20 @@
             <div class="job-description">
               <span class="job-icon">📄</span>
               <div>
-                <strong>Facture</strong>
-                <p>Imprimée automatiquement selon votre configuration (au paiement ou à la préparation). Générée en PDF avec vos informations légales, les détails de la commande et les montants TTC. Configurez le déclencheur dans les paramètres de votre boutique sur Hou.la.</p>
+                <strong data-i18n="job.invoice.title">Facture</strong>
+                <p data-i18n="job.invoice.desc">Imprimée automatiquement selon votre configuration (au paiement ou à la préparation). Générée en PDF avec vos informations légales, les détails de la commande et les montants TTC. Configurez le déclencheur dans les paramètres de votre boutique sur Hou.la.</p>
               </div>
             </div>
             <div class="job-config">
               <div class="config-row">
-                <label>Imprimante</label>
+                <label data-i18n="config.printer">Imprimante</label>
                 <select class="assignment-select" data-job-assign="invoice">
-                  <option value="">Non assignée</option>
+                  <option value="" data-i18n="config.unassigned">Non assignée</option>
                 </select>
               </div>
               <div class="config-row">
-                <label>Format</label>
-                <span class="config-value">PDF A4 — imprimé sur imprimante standard</span>
+                <label data-i18n="config.format">Format</label>
+                <span class="config-value" data-i18n="config.invoice.format-value">PDF A4 — imprimé sur imprimante standard</span>
               </div>
             </div>
           </div>
@@ -249,40 +249,48 @@
       <!-- Tab: History -->
       <div class="tab-panel hidden" id="panel-history">
         <div class="panel-header">
-          <h2>Historique des impressions</h2>
-          <button class="btn btn-sm btn-ghost" id="btn-clear-history">Effacer</button>
+          <h2 data-i18n="history.title">Historique des impressions</h2>
+          <button class="btn btn-sm btn-ghost" id="btn-clear-history" data-i18n="history.clear">Effacer</button>
         </div>
         <div class="history-list" id="history-list">
-          <div class="empty-state">Aucune impression enregistrée</div>
+          <div class="empty-state" data-i18n="history.empty">Aucune impression enregistrée</div>
         </div>
       </div>
 
       <!-- Tab: Settings -->
       <div class="tab-panel hidden" id="panel-settings">
         <div class="panel-header">
-          <h2>Paramètres</h2>
+          <h2 data-i18n="settings.title">Paramètres</h2>
         </div>
 
         <div class="settings-list">
           <div class="setting-item">
-            <span>Environnement</span>
+            <span data-i18n="settings.language">Langue</span>
+            <select class="setting-value assignment-select" id="setting-language">
+              <option value="it">Italiano</option>
+              <option value="fr">Français</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <span data-i18n="settings.environment">Environnement</span>
             <span class="setting-value" id="setting-env">production</span>
           </div>
           <div class="setting-item">
-            <span>API</span>
+            <span data-i18n="settings.api">API</span>
             <span class="setting-value" id="setting-api-url">—</span>
           </div>
           <div class="setting-item">
-            <span>Version</span>
+            <span data-i18n="settings.version">Version</span>
             <span class="setting-value">1.0.0</span>
           </div>
           <div class="setting-item">
-            <span>Dashboard Hou.la</span>
-            <button class="btn btn-sm btn-ghost" id="btn-open-dashboard">Ouvrir ↗</button>
+            <span data-i18n="settings.dashboard">Dashboard Hou.la</span>
+            <button class="btn btn-sm btn-ghost" id="btn-open-dashboard" data-i18n="settings.dashboard.open">Ouvrir ↗</button>
           </div>
           <div class="setting-item setting-danger">
-            <span>Déconnexion</span>
-            <button class="btn btn-sm btn-danger" id="btn-logout">Se déconnecter</button>
+            <span data-i18n="settings.logout">Déconnexion</span>
+            <button class="btn btn-sm btn-danger" id="btn-logout" data-i18n="settings.logout.button">Se déconnecter</button>
           </div>
         </div>
       </div>
@@ -290,13 +298,14 @@
       <!-- Error banner -->
       <div class="error-banner hidden" id="error-banner">
         <span id="error-text"></span>
-        <button class="btn btn-sm btn-ghost" id="btn-retry-all">Réessayer tout</button>
+        <button class="btn btn-sm btn-ghost" id="btn-retry-all" data-i18n="error.retry-all">Réessayer tout</button>
       </div>
 
     </section>
 
   </main>
 
+  <script src="i18n.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 import { BrowserWindow, Notification } from 'electron';
 import { PrinterInfo, PrinterZplConfig, DEFAULT_ZPL_CONFIG } from '../../shared/types';
+import { t, Language, DEFAULT_LANGUAGE } from '../../shared/i18n';
 import { NiimbotService, NiimbotDeviceInfo, renderProductLabel, LabelContent } from './niimbot';
 import { DEFAULT_MODEL, NIIMBOT_MODELS, NiimbotModelSpec } from './niimbot/niimbot-protocol';
 
@@ -407,9 +408,9 @@ export class PrinterService {
   /**
    * Send a test page to verify the printer works.
    */
-  async testPrint(printerName: string, zplConfig?: PrinterZplConfig): Promise<{ success: boolean; error?: string }> {
+  async testPrint(printerName: string, zplConfig?: PrinterZplConfig, lang: Language = DEFAULT_LANGUAGE): Promise<{ success: boolean; error?: string }> {
     const printer = this.detectedPrinters.find(p => p.name === printerName);
-    if (!printer) return { success: false, error: 'Imprimante non trouvée' };
+    if (!printer) return { success: false, error: t('error.printer-not-found', lang) };
 
     try {
       if (printer.type === 'niimbot') {
@@ -453,8 +454,8 @@ export class PrinterService {
       } else {
         // For standard printers, we just notify — full PDF test is complex
         new Notification({
-          title: 'Hou.la Print',
-          body: `Imprimante "${printerName}" détectée. Le test PDF sera disponible prochainement.`,
+          title: t('app.name', lang),
+          body: t('notif.printer-detected', lang, { printer: printerName }),
         }).show();
       }
       return { success: true };

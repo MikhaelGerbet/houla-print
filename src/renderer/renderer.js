@@ -15,6 +15,67 @@ if (!api) {
 }
 
 // ═══════════════════════════════════════════════════════
+// i18n — provided by window.i18n (generated from shared locales)
+// ═══════════════════════════════════════════════════════
+
+/** @type {{ t: Function, interpolate: Function, isLanguage: Function, LANGUAGES: any[], DEFAULT_LANGUAGE: string }} */
+const i18n = win.i18n || {
+  t: (k) => k,
+  interpolate: (s) => s,
+  isLanguage: () => false,
+  LANGUAGES: [],
+  DEFAULT_LANGUAGE: 'fr',
+};
+
+/** Current UI language — kept in sync with the persisted store value. */
+let currentLang = i18n.DEFAULT_LANGUAGE;
+
+/** Translate a key in the current language, with optional ${...} interpolation. */
+function tr(key, vars) {
+  return i18n.t(key, currentLang, vars);
+}
+
+/**
+ * Walk the DOM and apply translations to every element carrying a
+ * data-i18n* attribute. Sets textContent for data-i18n and the matching
+ * attribute for data-i18n-title / -placeholder / -alt.
+ */
+function applyTranslations(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-i18n]').forEach((el) => {
+    el.textContent = tr(el.getAttribute('data-i18n'));
+  });
+  scope.querySelectorAll('[data-i18n-title]').forEach((el) => {
+    el.setAttribute('title', tr(el.getAttribute('data-i18n-title')));
+  });
+  scope.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    el.setAttribute('placeholder', tr(el.getAttribute('data-i18n-placeholder')));
+  });
+  scope.querySelectorAll('[data-i18n-alt]').forEach((el) => {
+    el.setAttribute('alt', tr(el.getAttribute('data-i18n-alt')));
+  });
+  document.documentElement.setAttribute('lang', currentLang);
+}
+
+/**
+ * Set the active language: persist it via the store and re-render the UI live.
+ */
+async function setLanguage(lang) {
+  if (!i18n.isLanguage(lang) || lang === currentLang) return;
+  currentLang = lang;
+  try {
+    await api.setLanguage(lang);
+  } catch (err) {
+    console.error('[Renderer] setLanguage failed:', err);
+  }
+  applyTranslations();
+  const sel = document.getElementById('setting-language');
+  if (sel) sel.value = currentLang;
+  // Re-render the dynamic lists so their generated strings pick up the new language
+  if (currentState) updateUI(currentState);
+}
+
+// ═══════════════════════════════════════════════════════
 // DOM references
 // ═══════════════════════════════════════════════════════
 
@@ -36,13 +97,6 @@ const $settingEnv = document.getElementById('setting-env');
 const $settingApiUrl = document.getElementById('setting-api-url');
 const $historyList = document.getElementById('history-list');
 
-const JOB_TYPE_LABELS = {
-  product_label: 'Étiquettes produits',
-  order_summary: 'Récapitulatif commande',
-  invoice: 'Facture',
-  // shipping_label and packing_slip: disabled until shipping module is implemented
-};
-
 const PRINTER_TYPE_ICONS = {
   thermal: '🏷️',
   receipt: '🧾',
@@ -51,24 +105,26 @@ const PRINTER_TYPE_ICONS = {
   unknown: '❓',
 };
 
-const LABEL_SIZE_OPTIONS = [
-  { value: '57x32',   label: '57 × 32 mm — Standard' },
-  { value: '50x30',   label: '50 × 30 mm — Niimbot standard' },
-  { value: '40x30',   label: '40 × 30 mm — Petit (bijoux)' },
-  { value: '50x25',   label: '50 × 25 mm — Compact' },
-  { value: '100x50',  label: '100 × 50 mm — Moyen' },
-  { value: '100x100', label: '100 × 100 mm — Grand carré' },
-  { value: '100x150', label: '100 × 150 mm — Expédition (6×4")' },
-];
+/** Known label sizes (value only — labels come from translations via label-size.<value>) */
+const LABEL_SIZE_VALUES = ['57x32', '50x30', '40x30', '50x25', '100x50', '100x100', '100x150'];
+
+/** Translated label for a given label-size value. */
+function labelSizeLabel(value) {
+  const key = 'label-size.' + value;
+  const translated = tr(key);
+  if (translated !== key) return translated;
+  // Unknown / custom size → render as "<w> × <h> mm — Détecté (RFID)"
+  const [ww, hh] = String(value).split('x');
+  return tr('label-size.detected', { w: ww, h: hh });
+}
 
 /** Build <option> HTML, including a dynamic custom size if needed */
 function buildSizeOptions(extraSize) {
-  let opts = LABEL_SIZE_OPTIONS;
-  if (extraSize && !opts.find(o => o.value === extraSize)) {
-    const [ww, hh] = extraSize.split('x');
-    opts = [...opts, { value: extraSize, label: ww + ' × ' + hh + ' mm — Détecté (RFID)' }];
+  let values = LABEL_SIZE_VALUES;
+  if (extraSize && !values.includes(extraSize)) {
+    values = [...values, extraSize];
   }
-  return opts.map(o => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+  return values.map(v => `<option value="${escapeAttr(v)}">${escapeHtml(labelSizeLabel(v))}</option>`).join('');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -84,6 +140,14 @@ let lastPrintedCount = -1;
 
 function updateUI(state) {
   currentState = state;
+
+  // Keep UI language in sync with the persisted store value
+  if (state.language && i18n.isLanguage(state.language) && state.language !== currentLang) {
+    currentLang = state.language;
+    applyTranslations();
+    const langSel = document.getElementById('setting-language');
+    if (langSel) langSel.value = currentLang;
+  }
 
   // Detect print completion: if printedTodayCount increased, clear reprinting spinners
   if (lastPrintedCount >= 0 && state.printedTodayCount > lastPrintedCount && reprintingIds.size > 0) {
@@ -103,10 +167,10 @@ function updateUI(state) {
 
   // Status bar
   const statusMap = {
-    'connected':    { dot: true,  text: 'Connecté' },
-    'no-workspace': { dot: false, text: 'Activez une boutique' },
-    'error':        { dot: false, text: 'Erreur connexion' },
-    'disconnected': { dot: false, text: 'Déconnecté' },
+    'connected':    { dot: true,  key: 'status.connected' },
+    'no-workspace': { dot: false, key: 'status.no-workspace' },
+    'error':        { dot: false, key: 'status.error' },
+    'disconnected': { dot: false, key: 'status.disconnected' },
   };
   const status = statusMap[state.connectionStatus] || statusMap['disconnected'];
   if (status.dot) {
@@ -114,15 +178,15 @@ function updateUI(state) {
   } else {
     $statusDot.classList.remove('connected');
   }
-  $statusText.textContent = status.text;
+  $statusText.textContent = tr(status.key);
 
-  $statPending.textContent = `${state.pendingJobsCount} en attente`;
-  $statToday.textContent = `${state.printedTodayCount} imprimé(s)`;
+  $statPending.textContent = tr('status.pending', { count: state.pendingJobsCount });
+  $statToday.textContent = tr('status.today', { count: state.printedTodayCount });
 
   // Failed counter (hidden when 0)
   const failedCount = state.failedTodayCount || 0;
   if (failedCount > 0) {
-    $statFailed.textContent = `${failedCount} échoué(s)`;
+    $statFailed.textContent = tr('status.failed', { count: failedCount });
     $statFailed.classList.remove('hidden');
     $sepFailed.classList.remove('hidden');
   } else {
@@ -144,13 +208,13 @@ function updateUI(state) {
   if (offlinePrinters.length > 0) {
     $offlineBanners.innerHTML = offlinePrinters.map(p => {
       const mins = Math.floor((Date.now() - new Date(p.since).getTime()) / 60000);
-      const timeStr = mins < 1 ? '\u00e0 l\'instant' : `depuis ${mins} min`;
+      const timeStr = mins < 1 ? tr('offline.since.now') : tr('offline.since.ago', { min: mins });
       const plural = p.spooledCount > 1 ? 's' : '';
       return `<div class="offline-banner">
         <span class="offline-banner-icon">\u26a0</span>
         <div class="offline-banner-body">
-          <strong>${escapeHtml(p.printerName)} — hors ligne</strong>
-          <span>${p.spooledCount} t\u00e2che${plural} en attente — reprise auto d\u00e8s reconnexion</span>
+          <strong>${tr('offline.title', { printer: escapeHtml(p.printerName) })}</strong>
+          <span>${tr('offline.spooled', { count: p.spooledCount, plural })}</span><!--\u00e2che--><!-- en attente — reprise auto d\u00e8s reconnexion-->
         </div>
         <span class="offline-banner-since">${escapeHtml(timeStr)}</span>
       </div>`;
@@ -188,7 +252,7 @@ function renderWorkspaces(workspaces) {
   const allWorkspaces = workspaces || [];
 
   if (allWorkspaces.length === 0) {
-    $workspaceList.innerHTML = '<div class="empty-state">Aucune boutique trouvée</div>';
+    $workspaceList.innerHTML = `<div class="empty-state">${escapeHtml(tr('workspaces.empty'))}</div>`;
     return;
   }
 
@@ -197,7 +261,7 @@ function renderWorkspaces(workspaces) {
       <div class="card-icon">${ws.workspace.hasShop ? '🏪' : '📁'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(ws.workspace.name)}</div>
-        <div class="card-subtitle">${ws.workspace.hasShop ? (ws.config?.enabled ? 'Impression activée' : 'Impression désactivée') : 'Pas de boutique'}</div>
+        <div class="card-subtitle">${escapeHtml(ws.workspace.hasShop ? (ws.config?.enabled ? tr('workspaces.print-enabled') : tr('workspaces.print-disabled')) : tr('workspaces.no-shop'))}</div>
       </div>
       <div class="card-action">
         <label class="toggle">
@@ -223,16 +287,16 @@ function renderWorkspaces(workspaces) {
 
 function renderPrinters(printers) {
   if (!printers || printers.length === 0) {
-    $printerList.innerHTML = '<div class="empty-state">Aucune imprimante détectée</div>';
+    $printerList.innerHTML = `<div class="empty-state">${escapeHtml(tr('printers.empty'))}</div>`;
     return;
   }
 
   const typeLabels = {
-    thermal: 'Thermique (ZPL)',
-    receipt: 'Ticket (ESC/POS)',
-    standard: 'Standard (PDF)',
-    niimbot: 'Niimbot (étiquettes)',
-    unknown: 'Inconnu',
+    thermal: tr('printer-type.thermal'),
+    receipt: tr('printer-type.receipt'),
+    standard: tr('printer-type.standard'),
+    niimbot: tr('printer-type.niimbot'),
+    unknown: tr('printer-type.unknown'),
   };
 
   const formats = currentState?.printerLabelFormats || {};
@@ -243,19 +307,19 @@ function renderPrinters(printers) {
       ? `<span class="badge badge-detected">${fmt.widthMm}×${fmt.heightMm}mm</span>`
       : '';
     const detectBtn = p.type === 'niimbot'
-      ? `<button class="btn btn-sm btn-ghost btn-detect" data-detect-printer="${escapeAttr(p.name)}" title="Détecter automatiquement le format d'étiquette chargée dans l'imprimante"><span class="btn-detect-label">Détecter étiquette</span></button>`
+      ? `<button class="btn btn-sm btn-ghost btn-detect" data-detect-printer="${escapeAttr(p.name)}" title="${escapeAttr(tr('printers.detect-label.title'))}"><span class="btn-detect-label">${escapeHtml(tr('printers.detect-label'))}</span></button>`
       : '';
     return `
     <div class="card">
       <div class="card-icon">${PRINTER_TYPE_ICONS[p.type] || '🖨️'}</div>
       <div class="card-body">
         <div class="card-title">${escapeHtml(p.displayName)} ${fmtBadge}</div>
-        <div class="card-subtitle">${typeLabels[p.type] || p.type}${p.description ? ' • ' + escapeHtml(p.description) : ''} ${p.isDefault ? '• par défaut' : ''}</div>
+        <div class="card-subtitle">${typeLabels[p.type] || p.type}${p.description ? ' • ' + escapeHtml(p.description) : ''} ${p.isDefault ? '• ' + escapeHtml(tr('printers.default')) : ''}</div>
       </div>
       <div class="card-action">
         ${detectBtn}
         <button class="btn btn-sm btn-ghost btn-test" data-test-printer="${escapeAttr(p.name)}">
-          <span class="btn-test-label">Test</span>
+          <span class="btn-test-label">${escapeHtml(tr('printers.test'))}</span>
         </button>
       </div>
     </div>
@@ -274,7 +338,7 @@ function renderPrinters(printers) {
       // Disable button and show loading state
       btn.disabled = true;
       btn.classList.add('btn-test-loading');
-      if (labelSpan) labelSpan.textContent = 'Impression…';
+      if (labelSpan) labelSpan.textContent = tr('printers.test.printing');
 
       try {
         const result = await api.testPrinter(name);
@@ -282,7 +346,7 @@ function renderPrinters(printers) {
 
         if (result.success) {
           btn.classList.add('btn-test-success');
-          if (labelSpan) labelSpan.textContent = '✓ OK';
+          if (labelSpan) labelSpan.textContent = tr('printers.test.ok');
           // If RFID detected a label size, update the dropdown
           if (result.detectedLabel) {
             const dl = result.detectedLabel;
@@ -291,19 +355,19 @@ function renderPrinters(printers) {
           }
         } else {
           btn.classList.add('btn-test-error');
-          if (labelSpan) labelSpan.textContent = '✕ ' + (result.error || 'Erreur');
+          if (labelSpan) labelSpan.textContent = tr('printers.test.fail-prefix') + (result.error || tr('printers.detect.error').replace('✕ ', ''));
         }
       } catch (err) {
         btn.classList.remove('btn-test-loading');
         btn.classList.add('btn-test-error');
-        if (labelSpan) labelSpan.textContent = '✕ ' + (err.message || 'Erreur');
+        if (labelSpan) labelSpan.textContent = tr('printers.test.fail-prefix') + (err.message || tr('printers.detect.error').replace('✕ ', ''));
       }
 
       setTimeout(() => {
         testPrintInProgress = false;
         btn.disabled = false;
         btn.classList.remove('btn-test-success', 'btn-test-error');
-        if (labelSpan) labelSpan.textContent = 'Test';
+        if (labelSpan) labelSpan.textContent = tr('printers.test');
       }, 4000);
     });
   });
@@ -317,7 +381,7 @@ function renderPrinters(printers) {
 
       btn.disabled = true;
       btn.classList.add('btn-test-loading');
-      if (labelSpan) labelSpan.textContent = 'Lecture RFID…';
+      if (labelSpan) labelSpan.textContent = tr('printers.detecting-rfid');
 
       try {
         const result = await api.detectLabel(name);
@@ -332,20 +396,20 @@ function renderPrinters(printers) {
           showDetectNotification(true, dl);
         } else {
           btn.classList.add('btn-test-error');
-          if (labelSpan) labelSpan.textContent = '✕ Échec';
-          showDetectNotification(false, null, result.error || 'Aucune étiquette détectée. Vérifiez que des étiquettes sont chargées dans l\'imprimante.');
+          if (labelSpan) labelSpan.textContent = tr('printers.detect.fail');
+          showDetectNotification(false, null, result.error || tr('detect.fail.no-label'));
         }
       } catch (err) {
         btn.classList.remove('btn-test-loading');
         btn.classList.add('btn-test-error');
-        if (labelSpan) labelSpan.textContent = '✕ Erreur';
-        showDetectNotification(false, null, err.message || 'Impossible de communiquer avec l\'imprimante.');
+        if (labelSpan) labelSpan.textContent = tr('printers.detect.error');
+        showDetectNotification(false, null, err.message || tr('detect.fail.comm'));
       }
 
       setTimeout(() => {
         btn.disabled = false;
         btn.classList.remove('btn-test-success', 'btn-test-error');
-        if (labelSpan) labelSpan.textContent = 'Détecter étiquette';
+        if (labelSpan) labelSpan.textContent = tr('printers.detect-label');
       }, 5000);
     });
   });
@@ -365,7 +429,7 @@ function renderJobConfigs(assignments, printers, workspaces) {
     const type = el.dataset.jobAssign;
     const current = assignments?.[type] || '';
     // Preserve first "Non assignée" option, add printer options
-    el.innerHTML = `<option value="">Non assignée</option>${printerOptions}`;
+    el.innerHTML = `<option value="">${escapeHtml(tr('config.unassigned'))}</option>${printerOptions}`;
     el.value = current;
 
     // Remove old listeners by replacing node
@@ -448,8 +512,8 @@ function initZplConfigListeners() {
     toggle.addEventListener('click', () => {
       body.classList.toggle('hidden');
       toggle.textContent = body.classList.contains('hidden')
-        ? '⚙️ Configuration avancée ▸'
-        : '⚙️ Configuration avancée ▾';
+        ? tr('zpl.advanced')
+        : tr('zpl.advanced.open');
     });
   }
 
@@ -475,8 +539,8 @@ function initZplConfigListeners() {
       };
 
       await api.setPrinterZplConfig(printerName, config);
-      saveBtn.textContent = '✓ Enregistré';
-      setTimeout(() => { saveBtn.textContent = 'Enregistrer'; }, 2000);
+      saveBtn.textContent = tr('zpl.saved');
+      setTimeout(() => { saveBtn.textContent = tr('zpl.save'); }, 2000);
     });
   }
 
@@ -486,16 +550,16 @@ function initZplConfigListeners() {
       if (!printerName) return;
 
       testBtn.disabled = true;
-      testBtn.textContent = '⏳ Impression…';
+      testBtn.textContent = tr('zpl.test-print.printing');
       try {
         const result = await api.testPrinter(printerName);
-        testBtn.textContent = result.success ? '✓ Test OK' : '✗ Échec';
+        testBtn.textContent = result.success ? tr('zpl.test-print.ok') : tr('zpl.test-print.fail');
       } catch (err) {
-        testBtn.textContent = '✗ Erreur';
+        testBtn.textContent = tr('zpl.test-print.error');
       }
       setTimeout(() => {
         testBtn.disabled = false;
-        testBtn.textContent = '🖨️ Impression test';
+        testBtn.textContent = tr('zpl.test-print');
       }, 3000);
     });
   }
@@ -516,20 +580,20 @@ function renderProductLabelSizes(workspaces) {
   const detectedFmt = assignedPrinter ? formats[assignedPrinter] : null;
 
   if (shopWorkspaces.length === 0) {
-    container.innerHTML = '<div class="empty-state" style="padding:12px">Activez une boutique pour configurer le format</div>';
+    container.innerHTML = `<div class="empty-state" style="padding:12px">${escapeHtml(tr('config.enable-shop-hint'))}</div>`;
     return;
   }
 
   // Detected format info badge
   const detectedInfo = detectedFmt
     ? `<div class="detected-format-info">
-        <span class="badge badge-detected">📡 Format détecté : ${detectedFmt.widthMm} × ${detectedFmt.heightMm} mm</span>
+        <span class="badge badge-detected">${escapeHtml(tr('label-size.detected-badge', { w: detectedFmt.widthMm, h: detectedFmt.heightMm }))}</span>
       </div>`
     : '';
 
   const detectedSize = detectedFmt ? detectedFmt.widthMm + 'x' + detectedFmt.heightMm : null;
   const configSizes = shopWorkspaces.map(ws => ws.config?.productLabelSize).filter(Boolean);
-  const extraSize = detectedSize || configSizes.find(s => !LABEL_SIZE_OPTIONS.find(o => o.value === s)) || null;
+  const extraSize = detectedSize || configSizes.find(s => !LABEL_SIZE_VALUES.includes(s)) || null;
   const sizeOptions = buildSizeOptions(extraSize);
 
   container.innerHTML = detectedInfo + shopWorkspaces.map(ws => {
@@ -555,7 +619,7 @@ function renderProductLabelSizes(workspaces) {
       if (!existing) {
         const opt = document.createElement('option');
         opt.value = ds;
-        opt.textContent = detectedFmt.widthMm + ' × ' + detectedFmt.heightMm + ' mm — Détecté (RFID)';
+        opt.textContent = tr('label-size.detected', { w: detectedFmt.widthMm, h: detectedFmt.heightMm });
         el.appendChild(opt);
       }
       el.value = ds;
@@ -585,15 +649,15 @@ async function loadJobPreview(jobType, labelSize) {
   if (!api || !section || !img) return;
   try {
     section.style.display = '';
-    img.alt = 'Chargement...';
+    img.alt = tr('config.preview.loading');
     const dataUri = await api.previewLabel(labelSize);
     if (dataUri) {
       img.src = dataUri;
-      img.alt = 'Aperçu étiquette ' + labelSize;
+      img.alt = tr('config.preview.alt-dynamic', { size: labelSize });
     }
   } catch (err) {
     console.error('[Renderer] Preview error:', err);
-    img.alt = 'Erreur de chargement';
+    img.alt = tr('config.preview.error');
   }
 }
 
@@ -611,7 +675,7 @@ function updateDetectedLabelSize(sizeStr, detectedLabel) {
     } else {
       const opt = document.createElement('option');
       opt.value = sizeStr;
-      opt.textContent = detectedLabel.widthMm + ' × ' + detectedLabel.heightMm + ' mm — Détecté (RFID)';
+      opt.textContent = tr('label-size.detected', { w: detectedLabel.widthMm, h: detectedLabel.heightMm });
       el.appendChild(opt);
       el.value = sizeStr;
     }
@@ -625,7 +689,7 @@ function updateDetectedLabelSize(sizeStr, detectedLabel) {
   // Update detected badge
   const existingBadge = container.querySelector('.detected-format-info');
   const newBadge = `<div class="detected-format-info">
-    <span class="badge badge-detected">📡 Format détecté : ${detectedLabel.widthMm} × ${detectedLabel.heightMm} mm</span>
+    <span class="badge badge-detected">${escapeHtml(tr('label-size.detected-badge', { w: detectedLabel.widthMm, h: detectedLabel.heightMm }))}</span>
   </div>`;
   if (existingBadge) {
     existingBadge.outerHTML = newBadge;
@@ -648,10 +712,9 @@ function showDetectNotification(success, detectedLabel, errorMsg) {
       <div class="detect-notification detect-success">
         <span class="detect-notification-icon">✅</span>
         <div class="detect-notification-body">
-          <div class="detect-notification-title">Détection réussie !</div>
-          Votre imprimante contient des étiquettes de <strong>${detectedLabel.widthMm} × ${detectedLabel.heightMm} mm</strong>.
-          Le format a été appliqué automatiquement.
-          <div class="detect-notification-hint">Si ce n'est pas le bon format, vous pouvez le modifier manuellement dans la liste ci-dessous.</div>
+          <div class="detect-notification-title">${escapeHtml(tr('detect.success.title'))}</div>
+          ${tr('detect.success.body', { w: detectedLabel.widthMm, h: detectedLabel.heightMm })}
+          <div class="detect-notification-hint">${escapeHtml(tr('detect.success.hint'))}</div>
         </div>
       </div>`;
   } else {
@@ -659,9 +722,9 @@ function showDetectNotification(success, detectedLabel, errorMsg) {
       <div class="detect-notification detect-error">
         <span class="detect-notification-icon">⚠️</span>
         <div class="detect-notification-body">
-          <div class="detect-notification-title">Détection échouée</div>
-          ${escapeHtml(errorMsg || 'Impossible de détecter le format d\'étiquette.')}
-          <div class="detect-notification-hint">Vous pouvez sélectionner le format manuellement dans la liste ci-dessous.</div>
+          <div class="detect-notification-title">${escapeHtml(tr('detect.fail.title'))}</div>
+          ${escapeHtml(errorMsg || tr('detect.fail.default'))}
+          <div class="detect-notification-hint">${escapeHtml(tr('detect.fail.hint'))}</div>
         </div>
       </div>`;
   }
@@ -689,19 +752,18 @@ function showDetectNotification(success, detectedLabel, errorMsg) {
 // Print history
 // ═══════════════════════════════════════════════════════
 
-const HISTORY_TYPE_LABELS = {
-  product_label: 'Étiquette',
-  order_summary: 'Récap.',
-  invoice: 'Facture',
-  shipping_label: 'Expédition',
-  packing_slip: 'Bordereau',
-};
+/** Translated short label for a history entry type. */
+function historyTypeLabel(type) {
+  const key = 'history-type.' + type;
+  const translated = tr(key);
+  return translated === key ? type : translated;
+}
 
 function renderHistory(history) {
   if (!$historyList) return;
 
   if (!history || history.length === 0) {
-    $historyList.innerHTML = '<div class="empty-state">Aucune impression enregistrée</div>';
+    $historyList.innerHTML = `<div class="empty-state">${escapeHtml(tr('history.empty'))}</div>`;
     return;
   }
 
@@ -710,16 +772,16 @@ function renderHistory(history) {
     const statusIcon = isError ? '✕' : '✓';
     const statusClass = isError ? 'history-failed' : 'history-success';
     const time = formatTime(entry.timestamp);
-    const typeLabel = HISTORY_TYPE_LABELS[entry.type] || entry.type;
+    const typeLabel = historyTypeLabel(entry.type);
     const canReprint = !!(entry.payload || entry.labelData);
     const isReprinting = reprintingIds.has(entry.id);
     const reprintBtn = canReprint
       ? (isReprinting
         ? `<button class="btn btn-sm btn-ghost btn-reprint btn-reprint-loading" disabled><span class="spinner spinner-sm"></span></button>`
-        : `<button class="btn btn-sm btn-ghost btn-reprint" data-reprint-id="${escapeAttr(entry.id)}" title="R\u00e9imprimer">\ud83d\udda8</button>`)
+        : `<button class="btn btn-sm btn-ghost btn-reprint" data-reprint-id="${escapeAttr(entry.id)}" title="${escapeAttr(tr('history.reprint'))}">\ud83d\udda8</button>`)
       : '';
     const retryBtn = isError
-      ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="Réessayer depuis l'API">↻</button>`
+      ? `<button class="btn btn-sm btn-ghost btn-retry" data-retry-job="${escapeAttr(entry.jobId)}" title="${escapeAttr(tr('history.retry'))}">↻</button>`
       : '';
     const errorLine = isError && entry.error
       ? `<div class="history-error">${escapeHtml(entry.error)}</div>`
@@ -754,7 +816,7 @@ function renderHistory(history) {
         <div class="history-body">
           <div class="history-title">${escapeHtml(entry.productName)}</div>
           ${detailLine}
-          <div class="history-meta">${typeLabel} • ${time}${entry.attempts > 1 ? ' • ' + entry.attempts + ' tentatives' : ''}</div>
+          <div class="history-meta">${escapeHtml(typeLabel)} • ${time}${entry.attempts > 1 ? ' • ' + escapeHtml(tr('history.attempts', { count: entry.attempts })) : ''}</div>
           ${errorLine}
         </div>
         <div class="history-actions">
@@ -779,7 +841,7 @@ function renderHistory(history) {
         const result = await api.reprintJob(entryId);
         if (result && !result.success) {
           console.error('[Renderer] Reprint failed:', result.error);
-          showNotification(result.error || 'Erreur de réimpression', 'error');
+          showNotification(result.error || tr('history.reprint.error'), 'error');
           reprintingIds.delete(entryId);
           btn.disabled = false;
           btn.innerHTML = '🖨';
@@ -878,25 +940,25 @@ bindBtn('btn-logout', () => api.logout());
 bindBtn('btn-minimize', () => api.minimize());
 bindBtn('btn-close', () => api.minimize());
 bindBtn('btn-refresh-workspaces', async () => {
-  $workspaceList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Chargement des boutiques…</div>';
+  $workspaceList.innerHTML = `<div class="loading-state"><span class="spinner"></span> ${escapeHtml(tr('workspaces.loading.full'))}</div>`;
   try {
     await api.refreshWorkspaces();
   } catch (err) {
-    $workspaceList.innerHTML = '<div class="error-state">Erreur : ' + escapeHtml(err.message || 'Impossible de charger les boutiques') + '</div>';
+    $workspaceList.innerHTML = '<div class="error-state">' + escapeHtml(tr('error.prefix')) + escapeHtml(err.message || tr('workspaces.error')) + '</div>';
   }
 });
 bindBtn('btn-refresh-printers', async () => {
-  $printerList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Détection des imprimantes…</div>';
+  $printerList.innerHTML = `<div class="loading-state"><span class="spinner"></span> ${escapeHtml(tr('printers.detecting.full'))}</div>`;
   try {
     await api.listPrinters();
   } catch (err) {
-    $printerList.innerHTML = '<div class="error-state">Erreur : ' + escapeHtml(err.message || 'Impossible de détecter les imprimantes') + '</div>';
+    $printerList.innerHTML = '<div class="error-state">' + escapeHtml(tr('error.prefix')) + escapeHtml(err.message || tr('printers.error')) + '</div>';
   }
 });
 bindBtn('btn-retry-all', () => api.retryAllFailed());
 bindBtn('btn-clear-history', async () => {
   await api.clearHistory();
-  if ($historyList) $historyList.innerHTML = '<div class="empty-state">Aucune impression enregistrée</div>';
+  if ($historyList) $historyList.innerHTML = `<div class="empty-state">${escapeHtml(tr('history.empty'))}</div>`;
 });
 bindBtn('btn-open-dashboard', () => {
   const appUrl = currentState?.appUrl || 'https://app.hou.la';
@@ -907,20 +969,43 @@ bindBtn('btn-open-dashboard', () => {
 initZplConfigListeners();
 
 // ═══════════════════════════════════════════════════════
+// Language selector
+// ═══════════════════════════════════════════════════════
+
+const $settingLanguage = document.getElementById('setting-language');
+if ($settingLanguage) {
+  $settingLanguage.addEventListener('change', (e) => {
+    setLanguage(e.target.value);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 // IPC listener: state updates from main process
 // ═══════════════════════════════════════════════════════
 
 api.onStateUpdated((state) => updateUI(state));
 
-// Initial state fetch
-api.getState().then((state) => {
-  updateUI(state);
-  // Auto-detect printers on startup if authenticated and list is empty
-  if (state.authenticated && (!state.printers || state.printers.length === 0)) {
-    $printerList.innerHTML = '<div class="loading-state"><span class="spinner"></span> Détection des imprimantes…</div>';
-    api.listPrinters().catch(() => {});
+// Fetch the persisted language first, apply static translations, then load state.
+(async () => {
+  try {
+    const lang = await api.getLanguage();
+    if (i18n.isLanguage(lang)) currentLang = lang;
+  } catch (err) {
+    console.error('[Renderer] getLanguage failed:', err);
   }
-});
+  applyTranslations();
+  if ($settingLanguage) $settingLanguage.value = currentLang;
+
+  // Initial state fetch
+  api.getState().then((state) => {
+    updateUI(state);
+    // Auto-detect printers on startup if authenticated and list is empty
+    if (state.authenticated && (!state.printers || state.printers.length === 0)) {
+      $printerList.innerHTML = `<div class="loading-state"><span class="spinner"></span> ${escapeHtml(tr('printers.detecting.full'))}</div>`;
+      api.listPrinters().catch(() => {});
+    }
+  });
+})();
 
 // ═══════════════════════════════════════════════════════
 // Helpers
