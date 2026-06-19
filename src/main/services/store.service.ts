@@ -4,6 +4,7 @@ import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { PrinterAssignments, PrintHistoryEntry, WorkspaceState, PrintJob, PrinterZplConfig, DEFAULT_ZPL_CONFIG } from '../../shared/types';
 import { API_URLS, APP_URLS } from '../../shared/config';
+import { Language, DEFAULT_LANGUAGE, isLanguage } from '../../shared/i18n';
 
 interface StoreSchema {
   // Auth
@@ -42,6 +43,9 @@ interface StoreSchema {
   apiUrl: string;
   appUrl: string;
   env: 'production' | 'development';
+
+  // UI language (default 'fr')
+  language: Language;
 }
 
 const STORE_DEFAULTS: StoreSchema = {
@@ -66,6 +70,7 @@ const STORE_DEFAULTS: StoreSchema = {
   apiUrl: API_URLS.production,
   appUrl: APP_URLS.production,
   env: 'production',
+  language: DEFAULT_LANGUAGE,
 };
 
 const STORE_OPTIONS = {
@@ -287,6 +292,21 @@ export class StoreService {
     this.store.set('env', env);
     this.store.set('apiUrl', API_URLS[env]);
     this.store.set('appUrl', APP_URLS[env]);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // UI language
+  // ═══════════════════════════════════════════════════════
+
+  getLanguage(): Language {
+    const lang = this.store.get('language');
+    return isLanguage(lang) ? lang : DEFAULT_LANGUAGE;
+  }
+
+  setLanguage(language: Language): void {
+    if (isLanguage(language)) {
+      this.store.set('language', language);
+    }
   }
 
   // ═══════════════════════════════════════════════════════

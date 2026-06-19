@@ -10,6 +10,13 @@ import { WorkspaceService } from './services/workspace.service';
 import { ApiService } from './services/api.service';
 import { IPC, AppState } from '../shared/types';
 import { APP_NAME, APP_PROTOCOL } from '../shared/config';
+import { t, Language, isLanguage } from '../shared/i18n';
+
+/** Translate using the currently stored UI language. */
+function tr(key: string, vars?: Record<string, string | number>): string {
+  const lang: Language = store ? store.getLanguage() : 'fr';
+  return t(key, lang, vars);
+}
 
 // Catch unhandled errors
 process.on('uncaughtException', (err) => {
@@ -189,7 +196,7 @@ function createTray(): void {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Afficher',
+      label: tr('tray.show'),
       click: () => {
         mainWindow?.show();
         mainWindow?.focus();
@@ -197,12 +204,12 @@ function createTray(): void {
     },
     { type: 'separator' },
     {
-      label: 'Dashboard Hou.la',
+      label: tr('tray.dashboard'),
       click: () => shell.openExternal(`${store.getAppUrl()}/manager/shop/settings`),
     },
     { type: 'separator' },
     {
-      label: 'Quitter',
+      label: tr('tray.quit'),
       click: () => {
         app.exit(0);
       },
@@ -256,7 +263,7 @@ function isNetworkError(err: unknown): boolean {
 
 function setConnectionError(err: unknown): void {
   if (isNetworkError(err)) {
-    lastConnectionError = `API indisponible (${store.getApiUrl()}). Vérifiez que le serveur est démarré.`;
+    lastConnectionError = tr('error.api-unavailable', { url: store.getApiUrl() });
   } else if (err instanceof Error) {
     lastConnectionError = err.message;
   }
@@ -482,8 +489,8 @@ function broadcastState(): void {
 
 function updateTrayTooltip(): void {
   const pending = queue.getPendingCount();
-  const status = socket.isConnected() ? 'Connecté' : 'Déconnecté';
-  tray?.setToolTip(`${APP_NAME} — ${status} • ${pending} en attente`);
+  const status = socket.isConnected() ? tr('status.connected') : tr('status.disconnected');
+  tray?.setToolTip(tr('tray.tooltip', { app: APP_NAME, status, pending }));
 }
 
 // Handle deep link (houla-print://callback?code=...)

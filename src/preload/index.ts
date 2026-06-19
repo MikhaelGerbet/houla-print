@@ -56,4 +56,8 @@ contextBridge.exposeInMainWorld('houlaPrint', {
   minimize: () => ipcRenderer.send(IPC.APP_MINIMIZE),
   openExternal: (url: string) => ipcRenderer.send(IPC.OPEN_EXTERNAL, url),
   setEnv: (env: 'production' | 'development') => ipcRenderer.invoke(IPC.SET_ENV, env),
+
+  // Language
+  getLanguage: () => ipcRenderer.invoke(IPC.GET_LANGUAGE),
+  setLanguage: (language: 'en' | 'fr' | 'it') => ipcRenderer.invoke(IPC.SET_LANGUAGE, language),
 });

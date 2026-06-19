@@ -145,6 +145,8 @@ export interface AppState {
   env: 'production' | 'development';
   apiUrl: string;
   appUrl: string;
+  /** Current UI language */
+  language: 'en' | 'fr' | 'it';
 }
 
 /** IPC channel names for main ↔ renderer communication */
@@ -187,4 +189,8 @@ export const IPC = {
   OPEN_EXTERNAL: 'app:open-external',
   SET_ENV: 'app:set-env',
   NOTIFICATION: 'app:notification',
+
+  // Language
+  GET_LANGUAGE: 'app:get-language',
+  SET_LANGUAGE: 'app:set-language',
 } as const;
