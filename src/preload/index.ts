@@ -59,5 +59,5 @@ contextBridge.exposeInMainWorld('houlaPrint', {
 
   // Language
   getLanguage: () => ipcRenderer.invoke(IPC.GET_LANGUAGE),
-  setLanguage: (language: 'en' | 'fr' | 'it') => ipcRenderer.invoke(IPC.SET_LANGUAGE, language),
+  setLanguage: (language: 'en' | 'fr' | 'it' | 'es' | 'pt') => ipcRenderer.invoke(IPC.SET_LANGUAGE, language),
 });

@@ -5,8 +5,10 @@
 import fr from './locales/fr.json';
 import en from './locales/en.json';
 import it from './locales/it.json';
+import es from './locales/es.json';
+import pt from './locales/pt.json';
 
-export type Language = 'en' | 'fr' | 'it';
+export type Language = 'en' | 'fr' | 'it' | 'es' | 'pt';
 
 export const DEFAULT_LANGUAGE: Language = 'fr';
 
@@ -14,6 +16,8 @@ export const LANGUAGES: { value: Language; label: string }[] = [
   { value: 'it', label: 'Italiano' },
   { value: 'fr', label: 'Français' },
   { value: 'en', label: 'English' },
+  { value: 'es', label: 'Español' },
+  { value: 'pt', label: 'Português' },
 ];
 
 export type TranslationMap = Record<string, string>;
@@ -22,10 +26,18 @@ export const translations: Record<Language, TranslationMap> = {
   fr: fr as TranslationMap,
   en: en as TranslationMap,
   it: it as TranslationMap,
+  es: es as TranslationMap,
+  pt: pt as TranslationMap,
 };
 
 export function isLanguage(value: unknown): value is Language {
-  return value === 'en' || value === 'fr' || value === 'it';
+  return (
+    value === 'en' ||
+    value === 'fr' ||
+    value === 'it' ||
+    value === 'es' ||
+    value === 'pt'
+  );
 }
 
 /**

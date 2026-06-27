@@ -146,7 +146,7 @@ export interface AppState {
   apiUrl: string;
   appUrl: string;
   /** Current UI language */
-  language: 'en' | 'fr' | 'it';
+  language: 'en' | 'fr' | 'it' | 'es' | 'pt';
 }
 
 /** IPC channel names for main ↔ renderer communication */
